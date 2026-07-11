@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>PMProjects Web Workspace</title>
+    <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+    <main class="app-shell">
+        <section class="hero">
+            <div class="brand-mark" aria-hidden="true">
+                <span></span>
+                <span></span>
+                <span></span>
+                <span></span>
+            </div>
+            <div>
+                <h1>Project Workspace</h1>
+                <p id="workspaceSummary">Connect to Supabase to load projects and tasks.</p>
+            </div>
+            <div class="hero-actions">
+                <button id="configureButton" type="button">Configure</button>
+                <button id="refreshButton" type="button">Refresh</button>
+            </div>
+        </section>
+
+        <section id="configPanel" class="config-panel" hidden>
+            <label>
+                Supabase URL
+                <input id="projectUrlInput" type="url" placeholder="https://your-project.supabase.co" autocomplete="off">
+            </label>
+            <label>
+                Anon key
+                <input id="apiKeyInput" type="password" placeholder="eyJ..." autocomplete="off">
+            </label>
+            <label>
+                Workspace ID
+                <input id="workspaceIdInput" type="text" value="primary" autocomplete="off">
+            </label>
+            <button id="saveConfigButton" type="button">Save</button>
+        </section>
+
+        <section class="toolbar">
+            <div class="search-box">
+                <span aria-hidden="true">⌕</span>
+                <input id="searchInput" type="search" placeholder="Search project, PO, customer, serial, ARF">
+            </div>
+            <select id="statusFilter" aria-label="Status filter">
+                <option value="">All Status</option>
+            </select>
+            <select id="customerFilter" aria-label="Customer filter">
+                <option value="">All Customers</option>
+            </select>
+            <select id="mrbFilter" aria-label="MRB status filter">
+                <option value="">All MRB</option>
+            </select>
+            <span id="syncStatus" class="sync-status">Not connected</span>
+        </section>
+
+        <section class="metrics" aria-label="Workspace metrics">
+            <div>
+                <span>Projects</span>
+                <strong id="metricProjects">0</strong>
+            </div>
+            <div>
+                <span>Active</span>
+                <strong id="metricActive">0</strong>
+            </div>
+            <div>
+                <span>Avg Done</span>
+                <strong id="metricDone">0%</strong>
+            </div>
+            <div>
+                <span>Tasks</span>
+                <strong id="metricTasks">0</strong>
+            </div>
+        </section>
+
+        <section id="workspaceGrid" class="workspace-grid">
+            <div class="table-panel">
+                <div class="panel-header">
+                    <h2>Projects</h2>
+                    <span id="projectCount">0 rows</span>
+                </div>
+                <div class="table-scroll">
+                    <table class="data-table" id="projectsTable">
+                        <thead>
+                            <tr>
+                                <th>Open</th>
+                                <th>Project Name</th>
+                                <th>PO#</th>
+                                <th>SO#</th>
+                                <th>Rig#</th>
+                                <th>ARF Ref</th>
+                                <th>Status</th>
+                                <th>Customer</th>
+                                <th>Category</th>
+                                <th>% Done</th>
+                                <th>Serial #</th>
+                                <th>Priority</th>
+                                <th>ARF</th>
+                                <th>ETC Date</th>
+                                <th>MRB Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="projectsBody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <section id="projectWorkspaceView" class="task-workspace-page" hidden>
+            <div class="project-toolbar">
+                <button id="backToProjectsButton" type="button">Back to Projects</button>
+                <div>
+                    <span>Task workspace</span>
+                    <h2 id="workspaceProjectTitle">Project</h2>
+                    <span id="workspaceProjectSubtitle"></span>
+                </div>
+            </div>
+
+            <div id="workspaceHero" class="workspace-hero"></div>
+
+            <div id="taskWorkspacePanel" class="task-workspace-full">
+                <div class="panel-header">
+                    <h2>Task Workspace</h2>
+                    <span id="workspaceTaskCount">0 tasks</span>
+                </div>
+                <div class="table-scroll full-task-scroll">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>WBS</th>
+                                <th>Task Name</th>
+                                <th>Status</th>
+                                <th>MRB Status</th>
+                                <th>Serial #</th>
+                                <th>Part #</th>
+                                <th>Size</th>
+                                <th>RWP</th>
+                                <th>Category</th>
+                                <th>Comment</th>
+                            </tr>
+                        </thead>
+                        <tbody id="workspaceTasksBody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <script src="./app.js"></script>
+</body>
+</html>
