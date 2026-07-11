@@ -20,6 +20,13 @@ const DEFAULT_WORKSPACE = {
 
 window.PMProjectsAuth = {
     requireAuth(onAuthenticated) {
+        const inviteSession = sessionFromUrlHash();
+        if (inviteSession?.access_token) {
+            clearSession();
+            showPasswordSetup(inviteSession, onAuthenticated);
+            return;
+        }
+
         const session = loadSession();
         if (session?.access_token && !isSessionExpired(session)) {
             continueWithSession(session, onAuthenticated);
@@ -61,6 +68,30 @@ window.PMProjectsAuth = {
     }
 };
 
+function sessionFromUrlHash() {
+    const hash = window.location.hash.startsWith("#") ? window.location.hash.slice(1) : "";
+    if (!hash) {
+        return null;
+    }
+
+    const params = new URLSearchParams(hash);
+    const accessToken = params.get("access_token") || "";
+    const tokenType = params.get("token_type") || "bearer";
+    const type = params.get("type") || "";
+
+    if (!accessToken || type !== "invite") {
+        return null;
+    }
+
+    return {
+        access_token: accessToken,
+        refresh_token: params.get("refresh_token") || "",
+        expires_at: Number(params.get("expires_at")) || Math.floor(Date.now() / 1000) + Number(params.get("expires_in") || 3600),
+        token_type: tokenType,
+        user: null
+    };
+}
+
 function showLogin(onAuthenticated) {
     document.body.classList.add("auth-required");
 
@@ -91,11 +122,23 @@ function showLogin(onAuthenticated) {
     form.addEventListener("submit", async event => {
         event.preventDefault();
         error.textContent = "";
-        setFormBusy(form, true);
 
-        const data = new FormData(form);
-        const email = String(data.get("email") || "").trim();
-        const password = String(data.get("password") || "");
+        const emailInput = form.querySelector('input[name="email"]');
+        const passwordInput = form.querySelector('input[name="password"]');
+        const email = String(emailInput?.value || "").trim().toLowerCase();
+        const password = String(passwordInput?.value || "");
+
+        if (!email) {
+            error.textContent = "Enter email address.";
+            return;
+        }
+
+        if (!password) {
+            error.textContent = "Enter password.";
+            return;
+        }
+
+        setFormBusy(form, true);
 
         try {
             const session = await signInWithPassword(email, password);
@@ -113,6 +156,73 @@ function showLogin(onAuthenticated) {
     form.elements.email.focus();
 }
 
+function showPasswordSetup(inviteSession, onAuthenticated) {
+    document.body.classList.add("auth-required");
+
+    const overlay = document.createElement("section");
+    overlay.className = "login-screen";
+    overlay.innerHTML = `
+        <form class="login-panel">
+            <div class="brand-mark login-mark" aria-hidden="true">
+                <span></span><span></span><span></span><span></span>
+            </div>
+            <h1>Create Password</h1>
+            <p>Set a password to activate this workspace account.</p>
+            <label>
+                New password
+                <input name="password" type="password" autocomplete="new-password" minlength="8" required>
+            </label>
+            <label>
+                Confirm password
+                <input name="confirmPassword" type="password" autocomplete="new-password" minlength="8" required>
+            </label>
+            <button type="submit">Save Password</button>
+            <span class="login-error" role="alert"></span>
+        </form>
+    `;
+
+    const form = overlay.querySelector("form");
+    const error = overlay.querySelector(".login-error");
+    form.addEventListener("submit", async event => {
+        event.preventDefault();
+        error.textContent = "";
+
+        const password = String(form.querySelector('input[name="password"]')?.value || "");
+        const confirmPassword = String(form.querySelector('input[name="confirmPassword"]')?.value || "");
+
+        if (password.length < 8) {
+            error.textContent = "Password must be at least 8 characters.";
+            return;
+        }
+
+        if (password !== confirmPassword) {
+            error.textContent = "Passwords do not match.";
+            return;
+        }
+
+        setFormBusy(form, true);
+
+        try {
+            const user = await updatePassword(inviteSession.access_token, password);
+            const session = {
+                ...inviteSession,
+                user
+            };
+            saveSession(session);
+            history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
+            overlay.remove();
+            await continueWithSession(session, onAuthenticated);
+        } catch (setupError) {
+            error.textContent = setupError.message || "Password setup failed.";
+        } finally {
+            setFormBusy(form, false);
+        }
+    });
+
+    document.body.appendChild(overlay);
+    form.elements.password.focus();
+}
+
 async function continueWithSession(session, onAuthenticated) {
     const workspaces = await loadWorkspaceAccess(session);
     saveWorkspaces(workspaces);
@@ -122,13 +232,23 @@ async function continueWithSession(session, onAuthenticated) {
 }
 
 async function signInWithPassword(email, password) {
+    const payloadBody = {
+        email: String(email || "").trim().toLowerCase(),
+        password: String(password || "")
+    };
+
+    if (!payloadBody.email || !payloadBody.password) {
+        throw new Error("Enter email and password.");
+    }
+
     const response = await fetch(`${AUTH_CONFIG.projectUrl}/auth/v1/token?grant_type=password`, {
         method: "POST",
         headers: {
             apikey: AUTH_CONFIG.apiKey,
+            Authorization: `Bearer ${AUTH_CONFIG.apiKey}`,
             "Content-Type": "application/json"
         },
-        body: JSON.stringify({ email, password })
+        body: JSON.stringify(payloadBody)
     });
 
     const payload = await response.json().catch(() => ({}));
@@ -142,6 +262,25 @@ async function signInWithPassword(email, password) {
         expires_at: Math.floor(Date.now() / 1000) + Number(payload.expires_in || 3600),
         user: payload.user || null
     };
+}
+
+async function updatePassword(accessToken, password) {
+    const response = await fetch(`${AUTH_CONFIG.projectUrl}/auth/v1/user`, {
+        method: "PUT",
+        headers: {
+            apikey: AUTH_CONFIG.apiKey,
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ password })
+    });
+
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+        throw new Error(payload.error_description || payload.msg || payload.error || "Could not create password.");
+    }
+
+    return payload;
 }
 
 function loadSession() {
