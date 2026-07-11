@@ -2,12 +2,18 @@ const CONFIG_KEY = "pmprojects.web.supabase.config";
 const CACHE_KEY = "pmprojects.web.workspace.cache";
 const TASK_CACHE_PREFIX = "pmprojects.web.task.cache";
 const TASK_COLUMN_WIDTHS_KEY = "pmprojects.web.task.columnWidths";
-const TASK_CACHE_VERSION = 3;
+const TASK_CACHE_VERSION = 4;
+const DEFAULT_CONFIG = {
+    projectUrl: "https://sxwnyztslfyozxxlqxjd.supabase.co",
+    apiKey: "",
+    workspaceId: "pmprojects-main"
+};
 
 const state = {
     config: loadConfig(),
     projects: [],
     tasks: [],
+    equipment: [],
     cursor: null,
     projectId: new URLSearchParams(window.location.search).get("id"),
     hasFreshTaskCache: false,
@@ -70,11 +76,15 @@ async function refreshWorkspace({ force }) {
             fetchProjectCustomFields(),
             fetchTasks()
         ]);
-        const taskFields = await fetchTaskCustomFieldsForTasks(tasks);
+        const [taskFields, equipment] = await Promise.all([
+            fetchTaskCustomFieldsForTasks(tasks),
+            fetchEquipmentForTasks(tasks)
+        ]);
 
         state.cursor = cursor;
         state.projects = attachProjectFields(projects, projectFields);
         state.tasks = attachTaskFields(tasks, taskFields);
+        state.equipment = equipment;
         state.hasFreshTaskCache = true;
         state.didApplyInitialCollapse = false;
         saveCachedWorkspace();
@@ -137,6 +147,25 @@ async function fetchTaskCustomFieldsForTasks(tasks) {
     return pages.flat();
 }
 
+async function fetchEquipmentForTasks(tasks) {
+    const equipmentIds = [...new Set(tasks.map(task => task.linked_equipment_id).filter(Boolean))];
+    if (!equipmentIds.length) {
+        return [];
+    }
+
+    const chunks = [];
+    for (let index = 0; index < equipmentIds.length; index += 150) {
+        chunks.push(equipmentIds.slice(index, index + 150));
+    }
+
+    const pages = await Promise.all(chunks.map(chunk => supabaseGetAll("equipment_items_normalized", {
+        workspace_id: `eq.${state.config.workspaceId}`,
+        id: `in.(${chunk.join(",")})`,
+        select: "id,serial_number,category,size,rwp"
+    })));
+    return pages.flat();
+}
+
 async function supabaseGetAll(table, query, pageSize = 1000) {
     const rows = [];
     let offset = 0;
@@ -195,8 +224,7 @@ function renderTaskPage() {
     const inProgressTasks = taskRows.filter(row => row.task.status === "In-Progress").length;
     const notStartedTasks = taskRows.filter(row => row.task.status === "Not Started").length;
     const rejectedTasks = taskRows.filter(row => row.task.status === "Rejected").length;
-    const readyTasks = taskRows.filter(row => taskIsReady(row.task) && !taskWasDelivered(row.task)).length;
-    const deliveredTasks = taskRows.filter(row => taskWasDelivered(row.task)).length;
+    const valveSummary = valveSummaryForTasks(taskRows.map(row => row.task));
     const progress = progressForProject(project);
 
     elements.workspaceProjectTitle.textContent = project.name || "Untitled Project";
@@ -212,8 +240,7 @@ function renderTaskPage() {
         inProgressTasks,
         doneTasks,
         rejectedTasks,
-        readyTasks,
-        deliveredTasks,
+        valveSummary,
         project
     }));
 
@@ -430,9 +457,12 @@ function groupCustomFields(rows, idKey) {
 
 function loadConfig() {
     try {
-        return JSON.parse(localStorage.getItem(CONFIG_KEY)) || {};
+        return {
+            ...DEFAULT_CONFIG,
+            ...(JSON.parse(localStorage.getItem(CONFIG_KEY)) || {})
+        };
     } catch {
-        return {};
+        return { ...DEFAULT_CONFIG };
     }
 }
 
@@ -452,6 +482,7 @@ function loadCachedWorkspace() {
         const taskCache = JSON.parse(localStorage.getItem(taskCacheKey()));
         if (taskCache && taskCache.version === TASK_CACHE_VERSION && taskCache.workspaceId === state.config.workspaceId && taskCache.projectId === state.projectId) {
             state.tasks = taskCache.tasks || state.tasks;
+            state.equipment = taskCache.equipment || state.equipment;
             state.cursor = taskCache.cursor || state.cursor;
             state.hasFreshTaskCache = true;
         }
@@ -485,7 +516,8 @@ function saveCachedWorkspace() {
             workspaceId: state.config.workspaceId,
             projectId: state.projectId,
             cursor: state.cursor,
-            tasks: state.tasks
+            tasks: state.tasks,
+            equipment: state.equipment
         }));
     } catch (error) {
         console.warn("Task cache unavailable", error);
@@ -674,16 +706,17 @@ function scheduleTimingText(project) {
 }
 
 function valvesWidget(summary) {
+    const valves = summary.valveSummary;
     const item = document.createElement("section");
     item.className = "summary-valves";
     item.innerHTML = `
         <span class="summary-label">Valves</span>
         <div class="valve-counts">
-            ${valveCount("Total", summary.taskRows.length, "total")}
-            ${valveCount("In-Prog...", summary.inProgressTasks, "status")}
-            ${valveCount("Ready", summary.readyTasks, "info")}
-            ${valveCount("Rejected", summary.rejectedTasks, "alert")}
-            ${valveCount("Delivered", summary.deliveredTasks, "done")}
+            ${valveCount("Total", valves.total, "total")}
+            ${valveCount("In-Prog...", valves.inProgress, "status")}
+            ${valveCount("Ready", valves.ready, "info")}
+            ${valveCount("Rejected", valves.rejected, "alert")}
+            ${valveCount("Delivered", valves.delivered, "done")}
         </div>
     `;
     return item;
@@ -700,6 +733,83 @@ function compactSummaryWidget(label, value) {
     item.querySelector(".summary-label").textContent = label;
     item.querySelector("strong").textContent = value;
     return item;
+}
+
+function valveSummaryForTasks(tasks) {
+    const allSerials = new Set();
+    const inProgressSerials = new Set();
+    const readySerials = new Set();
+    const deliveredSerials = new Set();
+    const rejectedSerials = new Set();
+
+    tasks.forEach(task => {
+        if (!isValveTask(task)) {
+            return;
+        }
+
+        taskSerialTokens(task).forEach(serial => {
+            const normalized = normalizeSerial(serial);
+            if (!normalized) return;
+
+            allSerials.add(normalized);
+            if (task.status === "Rejected") {
+                rejectedSerials.add(normalized);
+            } else if (taskWasDelivered(task)) {
+                deliveredSerials.add(normalized);
+            } else if (taskIsReady(task)) {
+                readySerials.add(normalized);
+            } else if (task.status === "In-Progress" || task.status === "In Progress") {
+                inProgressSerials.add(normalized);
+            }
+        });
+    });
+
+    const ready = [...readySerials].filter(serial => !deliveredSerials.has(serial)).length;
+    const inProgress = [...inProgressSerials].filter(serial => (
+        !readySerials.has(serial)
+        && !deliveredSerials.has(serial)
+        && !rejectedSerials.has(serial)
+    )).length;
+
+    return {
+        total: Math.max(0, allSerials.size - rejectedSerials.size),
+        inProgress,
+        ready,
+        rejected: rejectedSerials.size,
+        delivered: deliveredSerials.size
+    };
+}
+
+function isValveTask(task) {
+    const linked = task.linked_equipment_id
+        ? state.equipment.find(item => item.id === task.linked_equipment_id)
+        : null;
+    const descriptor = [task.category, linked?.category, task.title, task.part_number]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+    return descriptor.includes("valve")
+        || descriptor.includes("manual")
+        || descriptor.includes("hcr")
+        || descriptor.includes("choke");
+}
+
+function taskSerialTokens(task) {
+    const linked = task.linked_equipment_id
+        ? state.equipment.find(item => item.id === task.linked_equipment_id)
+        : null;
+    return parsedSerials(task.serial_number || linked?.serial_number || "");
+}
+
+function parsedSerials(value) {
+    return String(value || "")
+        .split(/[,;\n]+/)
+        .map(item => item.trim())
+        .filter(Boolean);
+}
+
+function normalizeSerial(value) {
+    return String(value || "").trim().toLowerCase();
 }
 
 function taskStatusCount(label, value, className) {

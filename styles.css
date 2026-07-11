@@ -773,9 +773,11 @@ td .pill {
 
 .task-summary-widget {
     display: grid;
-    grid-template-columns: 190px 210px minmax(360px, 1.35fr) minmax(320px, 1fr);
+    grid-template-columns: 160px 190px 520px 430px;
     align-items: start;
+    justify-content: start;
     gap: 18px;
+    max-width: 1360px;
 }
 
 .task-summary-widget section {

@@ -1,6 +1,11 @@
 const CONFIG_KEY = "pmprojects.web.supabase.config";
 const CACHE_KEY = "pmprojects.web.workspace.cache";
 const WORKSPACE_CACHE_VERSION = 10;
+const DEFAULT_CONFIG = {
+    projectUrl: "https://sxwnyztslfyozxxlqxjd.supabase.co",
+    apiKey: "",
+    workspaceId: "pmprojects-main"
+};
 const PROJECT_STATUS_ORDER = [
     "Planning - Waiting for PO",
     "Planning",
@@ -9,6 +14,7 @@ const PROJECT_STATUS_ORDER = [
     "On-Hold",
     "Cancelled"
 ];
+const HIDDEN_PROJECT_STATUSES = new Set(["Done", "On-Hold"]);
 
 const state = {
     config: loadConfig(),
@@ -27,13 +33,7 @@ const state = {
 };
 
 const elements = {
-    configureButton: document.getElementById("configureButton"),
     refreshButton: document.getElementById("refreshButton"),
-    configPanel: document.getElementById("configPanel"),
-    projectUrlInput: document.getElementById("projectUrlInput"),
-    apiKeyInput: document.getElementById("apiKeyInput"),
-    workspaceIdInput: document.getElementById("workspaceIdInput"),
-    saveConfigButton: document.getElementById("saveConfigButton"),
     workspaceSummary: document.getElementById("workspaceSummary"),
     syncStatus: document.getElementById("syncStatus"),
     searchInput: document.getElementById("searchInput"),
@@ -52,34 +52,16 @@ const elements = {
 initialise();
 
 function initialise() {
-    fillConfigInputs();
     bindEvents();
     loadCachedWorkspace();
     render();
 
     if (isConfigured()) {
         refreshWorkspace({ force: false });
-    } else {
-        elements.configPanel.hidden = false;
     }
 }
 
 function bindEvents() {
-    elements.configureButton.addEventListener("click", () => {
-        elements.configPanel.hidden = !elements.configPanel.hidden;
-    });
-
-    elements.saveConfigButton.addEventListener("click", () => {
-        state.config = {
-            projectUrl: elements.projectUrlInput.value.trim().replace(/\/$/, ""),
-            apiKey: elements.apiKeyInput.value.trim(),
-            workspaceId: elements.workspaceIdInput.value.trim() || "primary"
-        };
-        localStorage.setItem(CONFIG_KEY, JSON.stringify(state.config));
-        elements.configPanel.hidden = true;
-        refreshWorkspace({ force: true });
-    });
-
     elements.refreshButton.addEventListener("click", () => refreshWorkspace({ force: true }));
     elements.searchInput.addEventListener("input", event => {
         state.filters.search = event.target.value.trim().toLowerCase();
@@ -101,8 +83,7 @@ function bindEvents() {
 
 async function refreshWorkspace({ force }) {
     if (!isConfigured()) {
-        setStatus("Configure Supabase first");
-        elements.configPanel.hidden = false;
+        setStatus("Supabase access key is not embedded.");
         return;
     }
 
@@ -276,24 +257,27 @@ function render() {
     renderFilters();
     renderMetrics();
     renderProjects();
-    elements.workspaceSummary.textContent = state.projects.length
-        ? `${state.projects.length} projects loaded from workspace ${state.config?.workspaceId || "primary"}.`
+    const visibleCount = visibleBaseProjects().length;
+    elements.workspaceSummary.textContent = visibleCount
+        ? `${visibleCount} projects loaded from workspace ${state.config?.workspaceId || "primary"}.`
         : "Connect to Supabase to load projects and tasks.";
 }
 
 function renderFilters() {
-    fillSelect(elements.statusFilter, "All Status", uniqueValues(state.projects.map(project => project.status)), state.filters.status);
-    fillSelect(elements.customerFilter, "All Customers", uniqueValues(state.projects.map(project => project.customer)), state.filters.customer);
-    fillSelect(elements.mrbFilter, "All MRB", uniqueValues(state.projects.map(project => project.mrb_status)), state.filters.mrb);
+    const visibleProjects = visibleBaseProjects();
+    fillSelect(elements.statusFilter, "All Status", uniqueValues(visibleProjects.map(project => project.status)), state.filters.status);
+    fillSelect(elements.customerFilter, "All Customers", uniqueValues(visibleProjects.map(project => project.customer)), state.filters.customer);
+    fillSelect(elements.mrbFilter, "All MRB", uniqueValues(visibleProjects.map(project => project.mrb_status)), state.filters.mrb);
 }
 
 function renderMetrics() {
-    const active = state.projects.filter(project => !["Done", "Cancelled"].includes(project.status)).length;
-    const avgDone = state.projects.length
-        ? Math.round(state.projects.reduce((sum, project) => sum + progressForProject(project), 0) / state.projects.length)
+    const visibleProjects = visibleBaseProjects();
+    const active = visibleProjects.filter(project => !["Done", "Cancelled"].includes(project.status)).length;
+    const avgDone = visibleProjects.length
+        ? Math.round(visibleProjects.reduce((sum, project) => sum + progressForProject(project), 0) / visibleProjects.length)
         : 0;
 
-    elements.metricProjects.textContent = String(state.projects.length);
+    elements.metricProjects.textContent = String(visibleProjects.length);
     elements.metricActive.textContent = String(active);
     elements.metricDone.textContent = `${avgDone}%`;
     elements.metricTasks.textContent = String(state.tasks.length);
@@ -351,7 +335,7 @@ function openProjectWorkspace(projectId) {
 
 
 function filteredProjects() {
-    return state.projects.filter(project => {
+    return visibleBaseProjects().filter(project => {
         if (state.filters.status && project.status !== state.filters.status) return false;
         if (state.filters.customer && project.customer !== state.filters.customer) return false;
         if (state.filters.mrb && project.mrb_status !== state.filters.mrb) return false;
@@ -371,6 +355,10 @@ function filteredProjects() {
         ].join(" ").toLowerCase();
         return haystack.includes(state.filters.search);
     });
+}
+
+function visibleBaseProjects() {
+    return state.projects.filter(project => !HIDDEN_PROJECT_STATUSES.has(project.status));
 }
 
 function groupedProjects(projects) {
@@ -722,16 +710,13 @@ function uniqueValues(values) {
 
 function loadConfig() {
     try {
-        return JSON.parse(localStorage.getItem(CONFIG_KEY)) || {};
+        return {
+            ...DEFAULT_CONFIG,
+            ...(JSON.parse(localStorage.getItem(CONFIG_KEY)) || {})
+        };
     } catch {
-        return {};
+        return { ...DEFAULT_CONFIG };
     }
-}
-
-function fillConfigInputs() {
-    elements.projectUrlInput.value = state.config.projectUrl || "";
-    elements.apiKeyInput.value = state.config.apiKey || "";
-    elements.workspaceIdInput.value = state.config.workspaceId || "primary";
 }
 
 function isConfigured() {
