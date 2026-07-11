@@ -1,13 +1,23 @@
 const CONFIG_KEY = "pmprojects.web.supabase.config";
 const CACHE_KEY = "pmprojects.web.workspace.cache";
+const WORKSPACE_CACHE_VERSION = 10;
+const PROJECT_STATUS_ORDER = [
+    "Planning - Waiting for PO",
+    "Planning",
+    "In-Progress",
+    "Done",
+    "On-Hold",
+    "Cancelled"
+];
 
 const state = {
     config: loadConfig(),
     projects: [],
     tasks: [],
+    equipment: [],
     cursor: null,
     selectedProjectId: null,
-    view: "projects",
+    hasFreshWorkspaceCache: false,
     filters: {
         search: "",
         status: "",
@@ -33,14 +43,6 @@ const elements = {
     workspaceGrid: document.getElementById("workspaceGrid"),
     projectCount: document.getElementById("projectCount"),
     projectsBody: document.getElementById("projectsBody"),
-    projectWorkspaceView: document.getElementById("projectWorkspaceView"),
-    backToProjectsButton: document.getElementById("backToProjectsButton"),
-    workspaceProjectTitle: document.getElementById("workspaceProjectTitle"),
-    workspaceProjectSubtitle: document.getElementById("workspaceProjectSubtitle"),
-    workspaceHero: document.getElementById("workspaceHero"),
-    taskWorkspacePanel: document.getElementById("taskWorkspacePanel"),
-    workspaceTaskCount: document.getElementById("workspaceTaskCount"),
-    workspaceTasksBody: document.getElementById("workspaceTasksBody"),
     metricProjects: document.getElementById("metricProjects"),
     metricActive: document.getElementById("metricActive"),
     metricDone: document.getElementById("metricDone"),
@@ -95,10 +97,6 @@ function bindEvents() {
         state.filters.mrb = event.target.value;
         renderProjects();
     });
-    elements.backToProjectsButton.addEventListener("click", () => {
-        state.view = "projects";
-        render();
-    });
 }
 
 async function refreshWorkspace({ force }) {
@@ -114,28 +112,37 @@ async function refreshWorkspace({ force }) {
         const hasRemoteChange = !state.cursor?.last_snapshot_updated_at
             || cursor?.last_snapshot_updated_at !== state.cursor.last_snapshot_updated_at;
 
-        if (!force && cursor && !hasRemoteChange && state.projects.length > 0) {
+        if (!force && cursor && !hasRemoteChange && state.projects.length > 0 && state.tasks.length > 0 && state.hasFreshWorkspaceCache) {
             setStatus(`Up to date · ${formatDateTime(cursor.last_snapshot_updated_at)}`);
             return;
         }
 
-        const [projects, projectFields, tasks, taskFields] = await Promise.all([
+        const [projects, projectFields, tasks, equipment] = await Promise.all([
             fetchProjects(),
             fetchProjectCustomFields(),
             fetchTasks(),
-            fetchTaskCustomFields()
+            fetchEquipment().catch(error => {
+                console.warn("Equipment detail unavailable", error);
+                return [];
+            })
         ]);
+        const taskFields = await fetchTaskProgressFieldsForTasks(tasks).catch(error => {
+            console.warn("Task progress fields unavailable", error);
+            return [];
+        });
 
         state.cursor = cursor;
         state.projects = attachProjectFields(projects, projectFields);
         state.tasks = attachTaskFields(tasks, taskFields);
+        state.equipment = equipment;
+        state.hasFreshWorkspaceCache = true;
 
         if (!state.selectedProjectId || !state.projects.some(project => project.id === state.selectedProjectId)) {
             state.selectedProjectId = state.projects[0]?.id || null;
         }
 
-        saveCachedWorkspace();
         render();
+        saveCachedWorkspace();
         setStatus(cursor ? `Loaded · ${formatDateTime(cursor.last_snapshot_updated_at)}` : "Loaded");
     } catch (error) {
         setStatus(error.message || "Refresh failed");
@@ -153,7 +160,7 @@ async function fetchSyncCursor() {
 }
 
 async function fetchProjects() {
-    return supabaseGet("projects_normalized", {
+    return supabaseGetAll("projects_normalized", {
         workspace_id: `eq.${state.config.workspaceId}`,
         select: "id,parent_project_id,linked_equipment_id,name,start_date,end_date,actual_start_date,actual_end_date,po_number,so_number,rig_number,arf_ref,status,customer,category,serial_number,completion_percent,priority,arf,estimated_completion_date,mrb_status,remarks,sort_order",
         order: "sort_order.asc"
@@ -161,25 +168,64 @@ async function fetchProjects() {
 }
 
 async function fetchProjectCustomFields() {
-    return supabaseGet("project_custom_fields", {
+    return supabaseGetAll("project_custom_fields", {
         workspace_id: `eq.${state.config.workspaceId}`,
         select: "project_id,field_key,field_value"
     });
 }
 
 async function fetchTasks() {
-    return supabaseGet("tasks_normalized", {
+    return supabaseGetAll("tasks_normalized", {
         workspace_id: `eq.${state.config.workspaceId}`,
-        select: "id,project_id,parent_task_id,linked_equipment_id,icon_name,comment,title,status,mrb_status,serial_number,part_number,size,rwp,category,depth,sort_order",
-        order: "depth.asc,sort_order.asc"
+        select: "id,project_id,parent_task_id,linked_equipment_id,title,status,serial_number,part_number,category",
+        order: "project_id.asc,depth.asc,sort_order.asc"
     });
 }
 
-async function fetchTaskCustomFields() {
-    return supabaseGet("task_custom_fields", {
+async function fetchEquipment() {
+    return supabaseGetAll("equipment_items_normalized", {
         workspace_id: `eq.${state.config.workspaceId}`,
-        select: "task_id,field_key,field_value"
+        select: "id,serial_number,category,size,rwp",
+        order: "sort_order.asc"
     });
+}
+
+async function fetchTaskProgressFieldsForTasks(tasks) {
+    const taskIds = tasks.map(task => task.id).filter(Boolean);
+    if (!taskIds.length) {
+        return [];
+    }
+
+    const chunks = [];
+    for (let index = 0; index < taskIds.length; index += 150) {
+        chunks.push(taskIds.slice(index, index + 150));
+    }
+
+    const pages = await Promise.all(chunks.map(chunk => supabaseGetAll("task_custom_fields", {
+        workspace_id: `eq.${state.config.workspaceId}`,
+        task_id: `in.(${chunk.join(",")})`,
+        select: "task_id,field_key,field_value"
+    })));
+    return pages
+        .flat()
+        .filter(row => row.field_key === "Task Progress Percent" || row.field_key === "Task Active" || row.field_key === "Task Delivery State");
+}
+
+async function supabaseGetAll(table, query, pageSize = 1000) {
+    const rows = [];
+    let offset = 0;
+    while (true) {
+        const page = await supabaseGet(table, {
+            ...query,
+            limit: String(pageSize),
+            offset: String(offset)
+        });
+        rows.push(...page);
+        if (page.length < pageSize) {
+            return rows;
+        }
+        offset += pageSize;
+    }
 }
 
 async function supabaseGet(table, query) {
@@ -227,12 +273,9 @@ function groupCustomFields(rows, idKey) {
 }
 
 function render() {
-    elements.workspaceGrid.hidden = state.view !== "projects";
-    elements.projectWorkspaceView.hidden = state.view !== "workspace";
     renderFilters();
     renderMetrics();
     renderProjects();
-    renderProjectWorkspace();
     elements.workspaceSummary.textContent = state.projects.length
         ? `${state.projects.length} projects loaded from workspace ${state.config?.workspaceId || "primary"}.`
         : "Connect to Supabase to load projects and tasks.";
@@ -247,7 +290,7 @@ function renderFilters() {
 function renderMetrics() {
     const active = state.projects.filter(project => !["Done", "Cancelled"].includes(project.status)).length;
     const avgDone = state.projects.length
-        ? Math.round(state.projects.reduce((sum, project) => sum + Number(project.completion_percent || 0), 0) / state.projects.length)
+        ? Math.round(state.projects.reduce((sum, project) => sum + progressForProject(project), 0) / state.projects.length)
         : 0;
 
     elements.metricProjects.textContent = String(state.projects.length);
@@ -262,7 +305,7 @@ function renderProjects() {
     elements.projectsBody.innerHTML = "";
 
     if (!rows.length) {
-        elements.projectsBody.appendChild(emptyRow(15, state.projects.length ? "No projects match the current filters." : "No projects loaded."));
+        elements.projectsBody.appendChild(emptyRow(14, state.projects.length ? "No projects match the current filters." : "No projects loaded."));
         return;
     }
 
@@ -279,7 +322,6 @@ function renderProjects() {
         tr.addEventListener("dblclick", () => openProjectWorkspace(project.id));
 
         tr.append(
-            openButtonCell(project),
             projectNameCell(project),
             textCell(project.po_number),
             textCell(project.so_number),
@@ -287,8 +329,8 @@ function renderProjects() {
             textCell(project.arf_ref),
             pillCell(project.status, statusClass(project.status)),
             textCell(project.customer),
-            categoryCell(project.category),
-            progressCell(project.completion_percent),
+            categoryCell(project),
+            progressCell(progressForProject(project)),
             textCell(project.serial_number),
             textCell(project.priority),
             pillCell(project.arf, "purple"),
@@ -304,96 +346,9 @@ function renderProjects() {
 
 function openProjectWorkspace(projectId) {
     state.selectedProjectId = projectId;
-    state.view = "workspace";
-    render();
+    window.location.href = `task.html?id=${encodeURIComponent(projectId)}`;
 }
 
-function renderProjectWorkspace() {
-    const project = state.projects.find(item => item.id === state.selectedProjectId);
-
-    if (!project) {
-        elements.workspaceProjectTitle.textContent = "Project";
-        elements.workspaceProjectSubtitle.textContent = "Select a project";
-        elements.workspaceHero.innerHTML = "";
-        elements.workspaceTasksBody.innerHTML = "";
-        elements.workspaceTaskCount.textContent = "0 tasks";
-        return;
-    }
-
-    const taskRows = buildTaskRows(project.id);
-    const doneTasks = taskRows.filter(row => row.task.status === "Done").length;
-    elements.workspaceProjectTitle.textContent = project.name || "Untitled Project";
-    elements.workspaceProjectSubtitle.textContent = compactJoin([project.arf_ref, project.customer, project.status], " · ");
-    elements.workspaceHero.innerHTML = "";
-    elements.workspaceHero.append(
-        heroStat("Progress", `${Math.round(Number(project.completion_percent || 0))}%`),
-        heroStat("Task Status", `${doneTasks} of ${taskRows.length} Done`),
-        heroStat("Schedule", `${formatDate(project.start_date)} to ${formatDate(project.end_date)}`),
-        heroStat("Valves", project.customFields?.["Valves"] || project.category || "—"),
-        heroStat("MRB", project.mrb_status || "—"),
-        heroStat("PO / SO", compactJoin([project.po_number, project.so_number], " / ") || "—"),
-        heroStat("ARF Ref", project.arf_ref || "—")
-    );
-
-    renderWorkspaceTasks(taskRows);
-}
-
-function renderWorkspaceTasks(taskRows) {
-    elements.workspaceTaskCount.textContent = `${taskRows.length} tasks`;
-    elements.workspaceTasksBody.innerHTML = "";
-
-    if (!taskRows.length) {
-        elements.workspaceTasksBody.appendChild(emptyRow(10, "No tasks for this project."));
-        return;
-    }
-
-    const fragment = document.createDocumentFragment();
-    taskRows.forEach(row => {
-        const tr = document.createElement("tr");
-        tr.append(
-            textCell(row.wbs),
-            taskTitleCell(row),
-            pillCell(row.task.status, statusClass(row.task.status)),
-            textCell(row.task.mrb_status),
-            textCell(row.task.serial_number),
-            textCell(row.task.part_number),
-            textCell(row.task.size),
-            textCell(row.task.rwp),
-            categoryCell(row.task.category),
-            textCell(row.task.comment)
-        );
-        fragment.appendChild(tr);
-    });
-    elements.workspaceTasksBody.appendChild(fragment);
-}
-
-
-function buildTaskRows(projectId) {
-    const all = state.tasks
-        .filter(task => task.project_id === projectId)
-        .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0));
-
-    const childrenByParent = new Map();
-    all.forEach(task => {
-        const key = task.parent_task_id || "";
-        if (!childrenByParent.has(key)) {
-            childrenByParent.set(key, []);
-        }
-        childrenByParent.get(key).push(task);
-    });
-
-    const rows = [];
-    const walk = (parentId, prefix) => {
-        const children = childrenByParent.get(parentId || "") || [];
-        children.forEach((task, index) => {
-            const wbs = prefix ? `${prefix}.${index + 1}` : `${index + 1}`;
-            rows.push({ task, wbs });
-            walk(task.id, wbs);
-        });
-    };
-    walk(null, "");
-    return rows;
-}
 
 function filteredProjects() {
     return state.projects.filter(project => {
@@ -419,24 +374,32 @@ function filteredProjects() {
 }
 
 function groupedProjects(projects) {
-    const groups = [];
-    const indexByStatus = new Map();
+    const byStatus = new Map();
     projects.forEach(project => {
         const status = project.status || "No Status";
-        if (!indexByStatus.has(status)) {
-            indexByStatus.set(status, groups.length);
-            groups.push({ status, projects: [] });
+        if (!byStatus.has(status)) {
+            byStatus.set(status, []);
         }
-        groups[indexByStatus.get(status)].projects.push(project);
+        byStatus.get(status).push(project);
     });
-    return groups;
+
+    const knownGroups = PROJECT_STATUS_ORDER
+        .filter(status => byStatus.has(status))
+        .map(status => ({ status, projects: byStatus.get(status) }));
+
+    const customGroups = [...byStatus.entries()]
+        .filter(([status]) => !PROJECT_STATUS_ORDER.includes(status))
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([status, rows]) => ({ status, projects: rows }));
+
+    return [...knownGroups, ...customGroups];
 }
 
 function groupHeaderRow(status, count) {
     const tr = document.createElement("tr");
     tr.className = `group-row ${statusClass(status)}`;
     const td = document.createElement("td");
-    td.colSpan = 15;
+    td.colSpan = 14;
     td.innerHTML = `<span class="group-pill"></span><strong></strong>`;
     td.querySelector(".group-pill").textContent = status;
     td.querySelector("strong").textContent = `${count} ${count === 1 ? "project" : "projects"}`;
@@ -446,24 +409,27 @@ function groupHeaderRow(status, count) {
 
 function projectNameCell(project) {
     const td = document.createElement("td");
+    td.className = "project-name-cell";
     const subline = compactJoin([project.po_number && `PO ${project.po_number}`, project.customer], " · ");
-    td.innerHTML = `<span class="project-name"></span><span class="subtext"></span>`;
+    td.innerHTML = `
+        <div class="project-name-row">
+            <div class="project-title-block">
+                <span class="project-name"></span>
+                <span class="subtext"></span>
+            </div>
+            <button class="project-add-button" type="button" aria-label="Add child project">+</button>
+            <button class="open-button" type="button">OPEN</button>
+        </div>
+    `;
     td.querySelector(".project-name").textContent = project.name || "Untitled Project";
     td.querySelector(".subtext").textContent = subline;
-    return td;
-}
-
-function openButtonCell(project) {
-    const td = document.createElement("td");
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "open-button";
-    button.textContent = "Open";
-    button.addEventListener("click", event => {
+    td.querySelector(".project-add-button").addEventListener("click", event => {
+        event.stopPropagation();
+    });
+    td.querySelector(".open-button").addEventListener("click", event => {
         event.stopPropagation();
         openProjectWorkspace(project.id);
     });
-    td.appendChild(button);
     return td;
 }
 
@@ -491,9 +457,167 @@ function pillCell(value, className) {
     return td;
 }
 
-function categoryCell(value) {
-    const className = value?.toLowerCase().includes("loose") ? "alert" : "info";
-    return pillCell(value, className);
+function categoryCell(project) {
+    const entries = projectCategoryDisplayEntries(project);
+    const td = document.createElement("td");
+    td.className = "category-display-cell";
+    entries.forEach(entry => {
+        const block = document.createElement("div");
+        block.className = "category-display";
+        block.innerHTML = `
+            <span class="category-dot"></span>
+            <div class="category-lines">
+                <span class="category-title"></span>
+                <span class="category-detail"></span>
+            </div>
+        `;
+        block.querySelector(".category-dot").style.background = categoryColor(entry.category);
+        block.querySelector(".category-title").style.color = categoryColor(entry.category);
+        block.querySelector(".category-title").textContent = entry.category || "—";
+        const detailElement = block.querySelector(".category-detail");
+        detailElement.textContent = entry.detail || "";
+        detailElement.hidden = !entry.detail;
+        td.appendChild(block);
+    });
+    return td;
+}
+
+function projectCategoryDisplayEntries(project) {
+    const linkedItems = linkedEquipmentForProject(project);
+    const summary = project.customFields?.["Category Summary"]
+        || project.customFields?.["Project Category Summary"]
+        || project.customFields?.["Valve Summary"]
+        || "";
+
+    const entries = linkedItems
+        .map(item => ({
+            category: (item.category || "").trim(),
+            detail: compactJoin([item.size, item.rwp], " · ")
+        }))
+        .filter(entry => entry.category)
+        .reduce((result, entry) => {
+            const key = `${entry.category}|${entry.detail}`;
+            if (!result.keys.has(key)) {
+                result.keys.add(key);
+                result.entries.push(entry);
+            }
+            return result;
+        }, { keys: new Set(), entries: [] }).entries;
+
+    if (!entries.length) {
+        const fallbackCategory = (project.category || "").trim() || "—";
+        entries.push({
+            category: fallbackCategory,
+            detail: summary || (fallbackCategory.toLowerCase().includes("loose") ? looseValveSummaryLine(project) : "")
+        });
+    } else if (entries.some(entry => entry.category.toLowerCase().includes("loose"))) {
+        const looseEntry = entries.find(entry => entry.category.toLowerCase().includes("loose"));
+        looseEntry.detail = summary || looseValveSummaryLine(project);
+    }
+
+    return entries;
+}
+
+function looseValveSummaryLine(project) {
+    const tasks = state.tasks.filter(task => task.project_id === project.id);
+    const readySerials = new Set();
+    const deliveredSerials = new Set();
+    const rejectedSerials = new Set();
+    const allSerials = new Set();
+
+    tasks.forEach(task => {
+        if (!isValveTask(task)) {
+            return;
+        }
+
+        taskSerialTokens(task).forEach(serial => {
+            const normalized = normalizeSerial(serial);
+            if (!normalized) return;
+            allSerials.add(normalized);
+            if (task.status === "Rejected") {
+                rejectedSerials.add(normalized);
+            } else if (taskWasDelivered(task)) {
+                deliveredSerials.add(normalized);
+            } else if (taskIsReady(task)) {
+                readySerials.add(normalized);
+            }
+        });
+    });
+
+    if (!allSerials.size) {
+        return "";
+    }
+
+    const acceptedTotal = Math.max(0, allSerials.size - rejectedSerials.size);
+    const pendingReady = [...readySerials].filter(serial => !deliveredSerials.has(serial)).length;
+    const rejectedText = rejectedSerials.size ? ` . ${rejectedSerials.size} rejected` : "";
+    return `${acceptedTotal} total . ${pendingReady} ready . ${deliveredSerials.size} delivered${rejectedText}`;
+}
+
+function isValveTask(task) {
+    const linked = task.linked_equipment_id
+        ? state.equipment.find(item => item.id === task.linked_equipment_id)
+        : null;
+    const descriptor = [task.category, linked?.category, task.title, task.part_number]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+    return descriptor.includes("valve")
+        || descriptor.includes("manual")
+        || descriptor.includes("hcr")
+        || descriptor.includes("choke");
+}
+
+function taskSerialTokens(task) {
+    const linked = task.linked_equipment_id
+        ? state.equipment.find(item => item.id === task.linked_equipment_id)
+        : null;
+    return parsedSerials(task.serial_number || linked?.serial_number || "");
+}
+
+function taskWasDelivered(task) {
+    return task.customFields?.["Task Delivery State"] === "Delivered";
+}
+
+function taskIsReady(task) {
+    return task.status === "Done" || taskProgress(task) >= 100;
+}
+
+function linkedEquipmentForProject(project) {
+    const linked = [];
+    if (project.linked_equipment_id) {
+        const direct = state.equipment.find(item => item.id === project.linked_equipment_id);
+        if (direct) linked.push(direct);
+    }
+
+    parsedSerials(project.serial_number).forEach(serial => {
+        const normalized = normalizeSerial(serial);
+        const match = state.equipment.find(item => normalizeSerial(item.serial_number) === normalized);
+        if (match && !linked.some(item => item.id === match.id)) {
+            linked.push(match);
+        }
+    });
+
+    return linked;
+}
+
+function parsedSerials(value) {
+    return String(value || "")
+        .split(/[,;\n]+/)
+        .map(item => item.trim())
+        .filter(Boolean);
+}
+
+function normalizeSerial(value) {
+    return String(value || "").trim().toLowerCase();
+}
+
+function categoryColor(value) {
+    const normalized = String(value || "").toLowerCase();
+    if (normalized.includes("loose")) return "var(--red)";
+    if (normalized.includes("civil")) return "#ff7a00";
+    if (normalized.includes("choke")) return "#00b7c7";
+    return "var(--blue)";
 }
 
 function progressCell(value) {
@@ -501,8 +625,68 @@ function progressCell(value) {
     const td = document.createElement("td");
     td.className = "progress-cell";
     td.style.setProperty("--progress", `${numeric}%`);
+    td.style.setProperty("--progress-min", numeric > 0 ? "18px" : "0");
     td.innerHTML = `<span>${numeric}%</span>`;
     return td;
+}
+
+function progressForProject(project) {
+    const childProjects = state.projects.filter(candidate => candidate.parent_project_id === project.id);
+    if (childProjects.length) {
+        const progressValues = [];
+        if (state.tasks.some(task => task.project_id === project.id)) {
+            progressValues.push(computeProjectTaskProgress(project.id));
+        }
+        childProjects.forEach(childProject => {
+            progressValues.push(progressForProject(childProject));
+        });
+        if (!progressValues.length) {
+            return Number(project.completion_percent || 0);
+        }
+        return Math.round(progressValues.reduce((sum, value) => sum + value, 0) / progressValues.length);
+    }
+
+    return Math.round(computeProjectTaskProgress(project.id, project));
+}
+
+function computeProjectTaskProgress(projectId, project = null) {
+    const projectTasks = state.tasks.filter(task => task.project_id === projectId);
+    if (!projectTasks.length) {
+        return Number(project?.completion_percent || 0);
+    }
+
+    const childrenByParent = new Map();
+    projectTasks.forEach(task => {
+        const key = task.parent_task_id || "";
+        if (!childrenByParent.has(key)) {
+            childrenByParent.set(key, []);
+        }
+        childrenByParent.get(key).push(task);
+    });
+
+    const leafTasks = projectTasks.filter(task => !(childrenByParent.get(task.id) || []).length && !isTaskInactive(task));
+    if (!leafTasks.length) {
+        return Number(project?.completion_percent || 0);
+    }
+
+    const total = leafTasks.reduce((sum, task) => sum + taskProgress(task), 0);
+    return total / leafTasks.length;
+}
+
+function taskProgress(task) {
+    const fields = task.customFields || {};
+    const explicit = Number(fields["Task Progress Percent"]);
+    if (Number.isFinite(explicit)) {
+        return Math.max(0, Math.min(100, explicit));
+    }
+    if (task.status === "Done") return 100;
+    if (task.status === "In-Progress" || task.status === "In Progress") return 50;
+    if (task.status === "Not Started") return 0;
+    return 0;
+}
+
+function isTaskInactive(task) {
+    return task.customFields?.["Task Active"] === "false";
 }
 
 function emptyRow(colspan, message) {
@@ -515,39 +699,11 @@ function emptyRow(colspan, message) {
     return tr;
 }
 
-function heroStat(label, value) {
-    const item = document.createElement("div");
-    item.className = "hero-stat";
-    item.innerHTML = `<span></span><strong></strong>`;
-    item.querySelector("span").textContent = label;
-    item.querySelector("strong").textContent = value || "—";
-    return item;
-}
-
-function detailSection(title, rows) {
-    const section = document.createElement("section");
-    section.className = "detail-section";
-    const heading = document.createElement("h3");
-    heading.textContent = title;
-    section.appendChild(heading);
-
-    rows.forEach(([label, value]) => {
-        const row = document.createElement("div");
-        row.className = "detail-row";
-        const labelElement = document.createElement("span");
-        const valueElement = document.createElement("strong");
-        labelElement.textContent = label;
-        valueElement.textContent = value || "—";
-        row.append(labelElement, valueElement);
-        section.appendChild(row);
-    });
-
-    return section;
-}
-
 function statusClass(value) {
     if (value === "Done") return "done";
     if (value === "Rejected" || value === "Cancelled") return "alert";
+    if (value === "On-Hold") return "alert";
+    if (value === "Planning - Waiting for PO") return "purple";
     if (value === "Planning") return "info";
     return "status";
 }
@@ -585,23 +741,37 @@ function isConfigured() {
 function loadCachedWorkspace() {
     try {
         const cached = JSON.parse(localStorage.getItem(CACHE_KEY));
-        if (!cached || cached.workspaceId !== state.config.workspaceId) return;
+        if (!cached || cached.version !== WORKSPACE_CACHE_VERSION || cached.workspaceId !== state.config.workspaceId) return;
         state.projects = cached.projects || [];
-        state.tasks = cached.tasks || [];
+        state.tasks = [];
+        state.equipment = [];
         state.cursor = cached.cursor || null;
         state.selectedProjectId = state.projects[0]?.id || null;
+        state.hasFreshWorkspaceCache = false;
     } catch {
         localStorage.removeItem(CACHE_KEY);
     }
 }
 
 function saveCachedWorkspace() {
-    localStorage.setItem(CACHE_KEY, JSON.stringify({
+    const payload = JSON.stringify({
+        version: WORKSPACE_CACHE_VERSION,
         workspaceId: state.config.workspaceId,
         cursor: state.cursor,
-        projects: state.projects,
-        tasks: state.tasks
-    }));
+        projects: state.projects
+    });
+
+    try {
+        localStorage.setItem(CACHE_KEY, payload);
+    } catch (error) {
+        console.warn("Workspace cache unavailable", error);
+        try {
+            localStorage.removeItem(CACHE_KEY);
+            localStorage.setItem(CACHE_KEY, payload);
+        } catch {
+            // Display should never depend on local cache.
+        }
+    }
 }
 
 function setStatus(message) {

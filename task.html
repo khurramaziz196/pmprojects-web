@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>PMProjects Task Workspace</title>
+    <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+    <main class="app-shell task-shell">
+        <section class="task-workspace-page">
+            <div class="task-action-bar">
+                <button id="backToProjectsButton" type="button">Back to Projects</button>
+                <button id="expandAllTasksButton" type="button">Expand All</button>
+                <button id="collapseAllTasksButton" type="button">Collapse All</button>
+                <button type="button" disabled>Add Task Column</button>
+                <button type="button" disabled>Columns</button>
+                <button type="button" disabled>Add Root Task</button>
+                <button type="button" disabled>Outdent Task</button>
+                <button type="button" disabled>Indent Task</button>
+                <button type="button" disabled>Add Child Task</button>
+                <button type="button" disabled>Delete Selected</button>
+            </div>
+
+            <div class="project-toolbar">
+                <div class="task-title-block">
+                    <span>Task workspace</span>
+                    <h2 id="workspaceProjectTitle">Project</h2>
+                    <span id="workspaceProjectSubtitle"></span>
+                </div>
+                <div id="workspaceTaskStatus" class="task-status-strip"></div>
+            </div>
+
+            <div id="workspaceHero" class="workspace-hero"></div>
+
+            <div class="task-workspace-full">
+                <div class="panel-header">
+                    <h2>Task Workspace</h2>
+                    <span id="workspaceTaskCount">0 tasks</span>
+                </div>
+                <div class="table-scroll full-task-scroll">
+                    <table class="data-table" id="workspaceTasksTable">
+                        <thead>
+                            <tr>
+                                <th>WBS</th>
+                                <th>Task Name</th>
+                                <th>Status</th>
+                                <th>MRB Status</th>
+                                <th>Progress</th>
+                                <th>Serial #</th>
+                                <th>Part #</th>
+                                <th>Size</th>
+                                <th>RWP</th>
+                                <th>Category</th>
+                                <th>Comment</th>
+                            </tr>
+                        </thead>
+                        <tbody id="workspaceTasksBody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <script src="./task.js?v=9"></script>
+</body>
+</html>
