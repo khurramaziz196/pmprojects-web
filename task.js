@@ -5,7 +5,7 @@ const TASK_COLUMN_WIDTHS_KEY = "pmprojects.web.task.columnWidths";
 const TASK_CACHE_VERSION = 4;
 const DEFAULT_CONFIG = {
     projectUrl: "https://sxwnyztslfyozxxlqxjd.supabase.co",
-    apiKey: "",
+    apiKey: "sb_publishable_Vdbds2yta-ZMBEQ2ap6wsw_lebc8C52",
     workspaceId: "pmprojects-main"
 };
 

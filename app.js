@@ -3,7 +3,7 @@ const CACHE_KEY = "pmprojects.web.workspace.cache";
 const WORKSPACE_CACHE_VERSION = 10;
 const DEFAULT_CONFIG = {
     projectUrl: "https://sxwnyztslfyozxxlqxjd.supabase.co",
-    apiKey: "",
+    apiKey: "sb_publishable_Vdbds2yta-ZMBEQ2ap6wsw_lebc8C52",
     workspaceId: "pmprojects-main"
 };
 const PROJECT_STATUS_ORDER = [
