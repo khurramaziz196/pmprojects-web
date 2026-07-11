@@ -23,6 +23,7 @@ const state = {
 
 const elements = {
     backToProjectsButton: document.getElementById("backToProjectsButton"),
+    logoutButton: document.getElementById("logoutButton"),
     expandAllTasksButton: document.getElementById("expandAllTasksButton"),
     collapseAllTasksButton: document.getElementById("collapseAllTasksButton"),
     workspaceProjectTitle: document.getElementById("workspaceProjectTitle"),
@@ -34,12 +35,14 @@ const elements = {
     workspaceTasksTable: document.getElementById("workspaceTasksTable")
 };
 
-initialiseTaskPage();
+window.PMProjectsAuth.requireAuth(initialiseTaskPage);
 
 function initialiseTaskPage() {
+    state.config = loadConfig();
     elements.backToProjectsButton.addEventListener("click", () => {
         window.location.href = "index.html";
     });
+    elements.logoutButton.addEventListener("click", () => window.PMProjectsAuth.logout());
     elements.expandAllTasksButton.addEventListener("click", () => {
         state.collapsedTaskIds.clear();
         renderTaskPage();
@@ -190,7 +193,7 @@ async function supabaseGet(table, query) {
     const response = await fetch(url, {
         headers: {
             apikey: state.config.apiKey,
-            Authorization: `Bearer ${state.config.apiKey}`,
+            Authorization: `Bearer ${window.PMProjectsAuth.accessToken() || state.config.apiKey}`,
             Accept: "application/json"
         }
     });

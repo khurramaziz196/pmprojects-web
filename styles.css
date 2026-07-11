@@ -27,6 +27,10 @@ body {
     font-size: 13px;
 }
 
+body.auth-required .app-shell {
+    display: none;
+}
+
 button,
 input,
 select {
@@ -45,6 +49,70 @@ button {
 
 button:hover {
     background: #dde5ef;
+}
+
+.login-screen {
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    background: linear-gradient(180deg, #edf5ff, #f7f9fc);
+}
+
+.login-panel {
+    width: min(420px, 100%);
+    display: grid;
+    gap: 14px;
+    padding: 28px;
+    border: 1px solid var(--line-strong);
+    border-radius: 16px;
+    background: var(--surface);
+    box-shadow: 0 18px 45px rgba(32, 36, 43, 0.12);
+}
+
+.login-panel h1 {
+    font-size: 26px;
+}
+
+.login-panel p {
+    color: var(--muted);
+    font-weight: 650;
+}
+
+.login-panel label {
+    display: grid;
+    gap: 6px;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 850;
+}
+
+.login-panel input {
+    min-height: 38px;
+}
+
+.login-panel button {
+    min-height: 38px;
+    background: var(--blue);
+    color: white;
+}
+
+.login-panel button:hover {
+    background: #1677f8;
+}
+
+.login-mark {
+    width: 52px;
+    height: 52px;
+}
+
+.login-error {
+    min-height: 18px;
+    color: var(--red);
+    font-weight: 800;
 }
 
 .app-shell {

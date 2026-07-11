@@ -4,9 +4,9 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>PMProjects Web Workspace</title>
-    <link rel="stylesheet" href="./styles.css">
+    <link rel="stylesheet" href="./styles.css?v=2">
 </head>
-<body>
+<body class="auth-required">
     <main class="app-shell">
         <section class="hero">
             <div class="brand-mark" aria-hidden="true">
@@ -21,6 +21,7 @@
             </div>
             <div class="hero-actions">
                 <button id="refreshButton" type="button">Refresh</button>
+                <button id="logoutButton" type="button">Logout</button>
             </div>
         </section>
 
@@ -38,6 +39,7 @@
             <select id="mrbFilter" aria-label="MRB status filter">
                 <option value="">All MRB</option>
             </select>
+            <select id="workspaceSelector" aria-label="Workspace selector" hidden></select>
             <span id="syncStatus" class="sync-status">Not connected</span>
         </section>
 
@@ -93,6 +95,7 @@
         </section>
     </main>
 
-    <script src="./app.js?v=14"></script>
+    <script src="./auth.js?v=5"></script>
+    <script src="./app.js?v=17"></script>
 </body>
 </html>

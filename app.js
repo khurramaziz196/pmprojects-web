@@ -34,12 +34,14 @@ const state = {
 
 const elements = {
     refreshButton: document.getElementById("refreshButton"),
+    logoutButton: document.getElementById("logoutButton"),
     workspaceSummary: document.getElementById("workspaceSummary"),
     syncStatus: document.getElementById("syncStatus"),
     searchInput: document.getElementById("searchInput"),
     statusFilter: document.getElementById("statusFilter"),
     customerFilter: document.getElementById("customerFilter"),
     mrbFilter: document.getElementById("mrbFilter"),
+    workspaceSelector: document.getElementById("workspaceSelector"),
     workspaceGrid: document.getElementById("workspaceGrid"),
     projectCount: document.getElementById("projectCount"),
     projectsBody: document.getElementById("projectsBody"),
@@ -49,10 +51,11 @@ const elements = {
     metricTasks: document.getElementById("metricTasks")
 };
 
-initialise();
+window.PMProjectsAuth.requireAuth(initialise);
 
 function initialise() {
     bindEvents();
+    renderWorkspaceSelector();
     loadCachedWorkspace();
     render();
 
@@ -63,6 +66,7 @@ function initialise() {
 
 function bindEvents() {
     elements.refreshButton.addEventListener("click", () => refreshWorkspace({ force: true }));
+    elements.logoutButton.addEventListener("click", () => window.PMProjectsAuth.logout());
     elements.searchInput.addEventListener("input", event => {
         state.filters.search = event.target.value.trim().toLowerCase();
         renderProjects();
@@ -79,6 +83,32 @@ function bindEvents() {
         state.filters.mrb = event.target.value;
         renderProjects();
     });
+    elements.workspaceSelector.addEventListener("change", event => {
+        const selected = window.PMProjectsAuth.selectWorkspace(event.target.value);
+        state.config = loadConfig();
+        state.projects = [];
+        state.tasks = [];
+        state.equipment = [];
+        state.cursor = null;
+        state.selectedProjectId = null;
+        state.hasFreshWorkspaceCache = false;
+        render();
+        refreshWorkspace({ force: true });
+        setStatus(`Workspace changed to ${workspaceDisplayName(selected)}`);
+    });
+}
+
+function renderWorkspaceSelector() {
+    const workspaces = window.PMProjectsAuth.workspaces();
+    elements.workspaceSelector.innerHTML = "";
+    workspaces.forEach(workspace => {
+        const option = document.createElement("option");
+        option.value = workspace.workspace_id;
+        option.textContent = workspaceDisplayName(workspace);
+        elements.workspaceSelector.appendChild(option);
+    });
+    elements.workspaceSelector.value = state.config.workspaceId || window.PMProjectsAuth.selectedWorkspaceId();
+    elements.workspaceSelector.hidden = workspaces.length <= 1;
 }
 
 async function refreshWorkspace({ force }) {
@@ -216,7 +246,7 @@ async function supabaseGet(table, query) {
     const response = await fetch(url, {
         headers: {
             apikey: state.config.apiKey,
-            Authorization: `Bearer ${state.config.apiKey}`,
+            Authorization: `Bearer ${window.PMProjectsAuth.accessToken() || state.config.apiKey}`,
             Accept: "application/json"
         }
     });
@@ -706,6 +736,10 @@ function fillSelect(select, emptyLabel, values, selectedValue) {
 
 function uniqueValues(values) {
     return [...new Set(values.filter(Boolean))].sort((a, b) => a.localeCompare(b));
+}
+
+function workspaceDisplayName(workspace) {
+    return workspace?.workspaces?.name || workspace?.workspace_id || "Workspace";
 }
 
 function loadConfig() {
