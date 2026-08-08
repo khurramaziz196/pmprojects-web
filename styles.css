@@ -370,13 +370,22 @@ select {
     left: 0;
     z-index: 4;
     width: 305px;
-    background: inherit;
+    background: var(--surface);
     box-shadow: 1px 0 0 var(--line);
 }
 
 #projectsTable thead th:nth-child(1) {
     z-index: 6;
     background: #f7f9fc;
+}
+
+#projectsTable tbody tr:nth-child(even) td:nth-child(1) {
+    background: #fbfdff;
+}
+
+#projectsTable tbody tr.selected td:nth-child(1),
+#projectsTable tbody tr:hover td:nth-child(1) {
+    background: var(--blue-soft);
 }
 
 #projectsTable tbody tr:nth-child(even) {
@@ -652,6 +661,59 @@ td .pill {
 .pill.purple {
     color: var(--purple);
     background: #fdeafd;
+}
+
+.editable-select-cell {
+    padding-top: 5px;
+    padding-bottom: 5px;
+}
+
+.editable-project-select,
+.editable-status-select {
+    max-width: 100%;
+    min-height: 24px;
+    border: 0;
+    border-radius: 6px;
+    padding: 3px 24px 3px 7px;
+    outline: 0;
+    font-weight: 850;
+    cursor: pointer;
+}
+
+.editable-project-select:disabled,
+.editable-status-select:disabled {
+    cursor: wait;
+    opacity: 0.65;
+}
+
+.editable-project-select.status,
+.editable-status-select.status {
+    color: var(--orange);
+    background-color: #fff2e8;
+}
+
+.editable-project-select.done,
+.editable-status-select.done {
+    color: var(--green);
+    background-color: #e9f8ef;
+}
+
+.editable-project-select.alert,
+.editable-status-select.alert {
+    color: var(--red);
+    background-color: #ffecef;
+}
+
+.editable-project-select.info,
+.editable-status-select.info {
+    color: var(--blue);
+    background-color: var(--blue-soft);
+}
+
+.editable-project-select.purple,
+.editable-status-select.purple {
+    color: var(--purple);
+    background-color: #fdeafd;
 }
 
 .progress-cell {

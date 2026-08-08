@@ -1,5 +1,6 @@
 const CONFIG_KEY = "pmprojects.web.supabase.config";
 const CACHE_KEY = "pmprojects.web.workspace.cache";
+const PROJECT_COLUMN_WIDTHS_KEY = "pmprojects.web.project.columnWidths";
 const WORKSPACE_CACHE_VERSION = 10;
 const DEFAULT_CONFIG = {
     projectUrl: "https://sxwnyztslfyozxxlqxjd.supabase.co",
@@ -15,7 +16,6 @@ const PROJECT_STATUS_ORDER = [
     "Cancelled"
 ];
 const HIDDEN_PROJECT_STATUSES = new Set(["Done", "On-Hold"]);
-
 const state = {
     config: loadConfig(),
     projects: [],
@@ -44,6 +44,7 @@ const elements = {
     workspaceSelector: document.getElementById("workspaceSelector"),
     workspaceGrid: document.getElementById("workspaceGrid"),
     projectCount: document.getElementById("projectCount"),
+    projectsTable: document.getElementById("projectsTable"),
     projectsBody: document.getElementById("projectsBody"),
     metricProjects: document.getElementById("metricProjects"),
     metricActive: document.getElementById("metricActive"),
@@ -56,6 +57,7 @@ window.PMProjectsAuth.requireAuth(initialise);
 function initialise() {
     bindEvents();
     renderWorkspaceSelector();
+    initialiseResizableProjectColumns();
     loadCachedWorkspace();
     render();
 
@@ -356,6 +358,7 @@ function renderProjects() {
     });
 
     elements.projectsBody.appendChild(fragment);
+    applyProjectColumnWidthsFromHeaders();
 }
 
 function openProjectWorkspace(projectId) {
@@ -816,4 +819,94 @@ function formatDateTime(value) {
 
 function compactJoin(values, separator) {
     return values.filter(Boolean).join(separator);
+}
+
+function initialiseResizableProjectColumns() {
+    const table = elements.projectsTable;
+    if (!table) return;
+
+    const headers = [...table.querySelectorAll("thead th")];
+    const savedWidths = loadProjectColumnWidths();
+    headers.forEach((header, index) => {
+        const width = savedWidths[index];
+        if (width) {
+            setProjectColumnWidth(index, width);
+        }
+
+        const handle = document.createElement("span");
+        handle.className = "column-resize-handle";
+        handle.addEventListener("mousedown", event => beginProjectColumnResize(event, index, header));
+        header.appendChild(handle);
+    });
+    updateProjectTableWidth();
+}
+
+function beginProjectColumnResize(event, index, header) {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = header.getBoundingClientRect().width;
+
+    const onMove = moveEvent => {
+        const nextWidth = Math.max(70, Math.round(startWidth + moveEvent.clientX - startX));
+        setProjectColumnWidth(index, nextWidth);
+        updateProjectTableWidth();
+    };
+
+    const onUp = () => {
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+        saveProjectColumnWidths();
+    };
+
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+}
+
+function setProjectColumnWidth(index, width) {
+    const columnIndex = index + 1;
+    const cells = elements.projectsTable.querySelectorAll(
+        `thead th:nth-child(${columnIndex}), tbody tr:not(.group-row):not(.empty-row) td:nth-child(${columnIndex})`
+    );
+    cells.forEach(cell => {
+        cell.style.width = `${width}px`;
+        cell.style.minWidth = `${width}px`;
+        cell.style.maxWidth = `${width}px`;
+    });
+}
+
+function updateProjectTableWidth() {
+    const headers = [...elements.projectsTable.querySelectorAll("thead th")];
+    const totalWidth = headers.reduce((sum, header) => sum + Math.round(header.getBoundingClientRect().width), 0);
+    if (totalWidth > 0) {
+        elements.projectsTable.style.width = `${totalWidth}px`;
+    }
+}
+
+function applyProjectColumnWidthsFromHeaders() {
+    const headers = [...elements.projectsTable.querySelectorAll("thead th")];
+    headers.forEach((header, index) => {
+        const width = Math.round(header.getBoundingClientRect().width);
+        if (width) {
+            setProjectColumnWidth(index, width);
+        }
+    });
+    updateProjectTableWidth();
+}
+
+function saveProjectColumnWidths() {
+    const headers = [...elements.projectsTable.querySelectorAll("thead th")];
+    const widths = headers.map(header => Math.round(header.getBoundingClientRect().width));
+    try {
+        localStorage.setItem(PROJECT_COLUMN_WIDTHS_KEY, JSON.stringify(widths));
+    } catch {
+        // Column resizing still works for the current session.
+    }
+}
+
+function loadProjectColumnWidths() {
+    try {
+        return JSON.parse(localStorage.getItem(PROJECT_COLUMN_WIDTHS_KEY)) || [];
+    } catch {
+        return [];
+    }
 }

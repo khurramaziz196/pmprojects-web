@@ -20,6 +20,11 @@ const DEFAULT_WORKSPACE = {
 
 window.PMProjectsAuth = {
     requireAuth(onAuthenticated) {
+        if (isLocalDevelopmentHost()) {
+            continueLocally(onAuthenticated);
+            return;
+        }
+
         const inviteSession = sessionFromUrlHash();
         if (inviteSession?.access_token) {
             clearSession();
@@ -67,6 +72,18 @@ window.PMProjectsAuth = {
         window.location.href = "index.html";
     }
 };
+
+function isLocalDevelopmentHost() {
+    return ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
+}
+
+function continueLocally(onAuthenticated) {
+    saveWorkspaces([DEFAULT_WORKSPACE]);
+    applyWorkspaceConfig(DEFAULT_WORKSPACE);
+    localStorage.setItem(SELECTED_WORKSPACE_KEY, DEFAULT_WORKSPACE.workspace_id);
+    document.body.classList.remove("auth-required");
+    onAuthenticated(null);
+}
 
 function sessionFromUrlHash() {
     const hash = window.location.hash.startsWith("#") ? window.location.hash.slice(1) : "";

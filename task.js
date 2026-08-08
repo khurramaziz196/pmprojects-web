@@ -2,7 +2,21 @@ const CONFIG_KEY = "pmprojects.web.supabase.config";
 const CACHE_KEY = "pmprojects.web.workspace.cache";
 const TASK_CACHE_PREFIX = "pmprojects.web.task.cache";
 const TASK_COLUMN_WIDTHS_KEY = "pmprojects.web.task.columnWidths";
-const TASK_CACHE_VERSION = 4;
+const TASK_CACHE_VERSION = 5;
+const TASK_STATUS_OPTIONS = [
+    "Not Started",
+    "In-Progress",
+    "Done",
+    "Rejected"
+];
+const TASK_MRB_STATUS_OPTIONS = [
+    "Waiting from ARF",
+    "Under Review",
+    "Uploaded to the Portal",
+    "Hard Copy Ready",
+    "Hard copy delivered"
+];
+const TASK_EDITABLE_FIELDS = new Set(["status", "mrb_status"]);
 const DEFAULT_CONFIG = {
     projectUrl: "https://sxwnyztslfyozxxlqxjd.supabase.co",
     apiKey: "sb_publishable_Vdbds2yta-ZMBEQ2ap6wsw_lebc8C52",
@@ -206,6 +220,147 @@ async function supabaseGet(table, query) {
     return response.json();
 }
 
+async function supabasePatch(table, query, payload) {
+    const url = new URL(`${state.config.projectUrl}/rest/v1/${table}`);
+    Object.entries(query).forEach(([key, value]) => url.searchParams.set(key, value));
+
+    const response = await fetch(url, {
+        method: "PATCH",
+        headers: {
+            apikey: state.config.apiKey,
+            Authorization: `Bearer ${window.PMProjectsAuth.accessToken() || state.config.apiKey}`,
+            Accept: "application/json",
+            "Content-Type": "application/json",
+            Prefer: "return=minimal"
+        },
+        body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+        const body = await response.text();
+        throw new Error(`${table} update failed (${response.status}) ${body}`.trim());
+    }
+}
+
+async function supabaseUpsert(table, query, payload) {
+    const url = new URL(`${state.config.projectUrl}/rest/v1/${table}`);
+    Object.entries(query).forEach(([key, value]) => url.searchParams.set(key, value));
+
+    const response = await fetch(url, {
+        method: "POST",
+        headers: {
+            apikey: state.config.apiKey,
+            Authorization: `Bearer ${window.PMProjectsAuth.accessToken() || state.config.apiKey}`,
+            Accept: "application/json",
+            "Content-Type": "application/json",
+            Prefer: "resolution=merge-duplicates,return=minimal"
+        },
+        body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+        const body = await response.text();
+        throw new Error(`${table} upsert failed (${response.status}) ${body}`.trim());
+    }
+}
+
+async function updateTaskEditableField(taskId, field, value) {
+    if (!TASK_EDITABLE_FIELDS.has(field)) {
+        throw new Error("Only task Status and MRB Status can be changed from the web app.");
+    }
+
+    const previousTasks = state.tasks.map(task => ({
+        ...task,
+        customFields: { ...(task.customFields || {}) }
+    }));
+    const task = state.tasks.find(item => item.id === taskId);
+    if (!task) {
+        throw new Error("Task not found.");
+    }
+
+    const changedTasks = new Map();
+    task[field] = value;
+    changedTasks.set(task.id, { [field]: value });
+
+    if (field === "status") {
+        rollUpParentTaskStatuses(task.id, changedTasks);
+    }
+
+    renderTaskPage();
+
+    try {
+        for (const [changedTaskId, payload] of changedTasks.entries()) {
+            await supabasePatch("tasks_normalized", {
+                workspace_id: `eq.${state.config.workspaceId}`,
+                id: `eq.${changedTaskId}`
+            }, payload);
+        }
+        await touchWorkspaceSyncCursor();
+        saveCachedWorkspace();
+    } catch (error) {
+        state.tasks = previousTasks;
+        renderTaskPage();
+        throw error;
+    }
+}
+
+function rollUpParentTaskStatuses(changedTaskId, changedTasks) {
+    let parentId = state.tasks.find(task => task.id === changedTaskId)?.parent_task_id || "";
+
+    while (parentId) {
+        const parent = state.tasks.find(task => task.id === parentId);
+        if (!parent) return;
+
+        const childStatuses = state.tasks
+            .filter(task => task.parent_task_id === parent.id && !isTaskInactive(task))
+            .map(task => task.status);
+        const rolledStatus = rolledParentStatus(childStatuses);
+
+        if (parent.status !== rolledStatus) {
+            parent.status = rolledStatus;
+            changedTasks.set(parent.id, {
+                ...(changedTasks.get(parent.id) || {}),
+                status: rolledStatus
+            });
+        }
+        parentId = parent.parent_task_id || "";
+    }
+}
+
+function rolledParentStatus(childStatuses) {
+    if (!childStatuses.length) {
+        return "Not Started";
+    }
+    if (childStatuses.every(status => status === "Done")) {
+        return "Done";
+    }
+    return "In-Progress";
+}
+
+function isTaskInactive(task) {
+    const value = task.customFields?.["Task Active"];
+    return value === false || String(value || "").toLowerCase() === "false";
+}
+
+async function touchWorkspaceSyncCursor() {
+    const timestamp = new Date().toISOString();
+    await supabaseUpsert("workspace_sync_cursors", {
+        on_conflict: "workspace_id"
+    }, [{
+        workspace_id: state.config.workspaceId,
+        last_snapshot_updated_at: timestamp,
+        last_snapshot_actor: "PMProjects Web",
+        last_normalized_import_at: timestamp
+    }]);
+    state.cursor = {
+        ...(state.cursor || {}),
+        workspace_id: state.config.workspaceId,
+        last_snapshot_updated_at: timestamp,
+        last_snapshot_actor: "PMProjects Web",
+        last_normalized_import_at: timestamp
+    };
+}
+
 function renderTaskPage() {
     const project = state.projects.find(item => item.id === state.projectId);
     if (!project) {
@@ -266,8 +421,8 @@ function renderTasks(taskRows) {
         tr.append(
             textCell(row.wbs),
             taskTitleCell(row),
-            pillCell(row.task.status, statusClass(row.task.status)),
-            textCell(row.task.mrb_status),
+            editableTaskSelectCell(row.task, "status", TASK_STATUS_OPTIONS, statusClass(row.task.status)),
+            editableTaskSelectCell(row.task, "mrb_status", TASK_MRB_STATUS_OPTIONS, "status"),
             taskProgressCell(row, taskRows),
             textCell(row.task.serial_number),
             textCell(row.task.part_number),
@@ -578,6 +733,43 @@ function pillCell(value, className) {
     return td;
 }
 
+function editableTaskSelectCell(task, field, baseOptions, className) {
+    const td = document.createElement("td");
+    td.className = "editable-select-cell";
+    const select = document.createElement("select");
+    select.className = `editable-status-select ${className || "status"}`;
+
+    const currentValue = String(task[field] || "").trim();
+    const options = uniqueValues([...baseOptions, currentValue].filter(Boolean));
+    options.forEach(optionValue => {
+        select.appendChild(new Option(optionValue, optionValue));
+    });
+    select.value = currentValue;
+
+    select.addEventListener("click", event => event.stopPropagation());
+    select.addEventListener("dblclick", event => event.stopPropagation());
+    select.addEventListener("change", async event => {
+        event.stopPropagation();
+        const nextValue = event.target.value;
+        const previousValue = task[field] || "";
+        if (nextValue === previousValue) return;
+
+        select.disabled = true;
+        try {
+            await updateTaskEditableField(task.id, field, nextValue);
+        } catch (error) {
+            select.value = previousValue;
+            elements.workspaceProjectSubtitle.textContent = error.message || "Task update failed";
+            console.error(error);
+        } finally {
+            select.disabled = false;
+        }
+    });
+
+    td.appendChild(select);
+    return td;
+}
+
 function categoryCell(value) {
     const className = value?.toLowerCase().includes("loose") ? "alert" : "info";
     return pillCell(value, className);
@@ -825,18 +1017,27 @@ function taskStatusCount(label, value, className) {
 }
 
 function progressForProject(project) {
-    const storedProgress = Number(project.completion_percent || 0);
-    if (storedProgress > 0 || project.status === "Done") {
-        return project.status === "Done" ? Math.max(storedProgress, 100) : storedProgress;
-    }
-
     const projectTasks = state.tasks.filter(task => task.project_id === project.id);
     if (!projectTasks.length) {
-        return storedProgress;
+        return Number(project.completion_percent || 0);
     }
 
-    const completedTasks = projectTasks.filter(task => task.status === "Done").length;
-    return Math.round((completedTasks / projectTasks.length) * 100);
+    const childrenByParent = new Map();
+    projectTasks.forEach(task => {
+        const key = task.parent_task_id || "";
+        if (!childrenByParent.has(key)) {
+            childrenByParent.set(key, []);
+        }
+        childrenByParent.get(key).push(task);
+    });
+
+    const leafTasks = projectTasks.filter(task => !(childrenByParent.get(task.id) || []).length && !isTaskInactive(task));
+    if (!leafTasks.length) {
+        return Number(project.completion_percent || 0);
+    }
+
+    const total = leafTasks.reduce((sum, task) => sum + taskProgressForStatusAndFields(task), 0);
+    return Math.round(total / leafTasks.length);
 }
 
 function progressForTaskRow(row, taskRows) {
@@ -859,6 +1060,7 @@ function storedProgressForTask(task) {
     const fields = task.customFields || {};
     const candidates = [
         task.completion_percent,
+        fields["Task Progress Percent"],
         fields.Progress,
         fields.progress,
         fields["% Done"],
@@ -938,6 +1140,10 @@ function startOfDay(date) {
 
 function compactJoin(values, separator) {
     return values.filter(Boolean).join(separator);
+}
+
+function uniqueValues(values) {
+    return values.filter((value, index, all) => value && all.indexOf(value) === index);
 }
 
 function initialiseResizableTaskColumns() {
