@@ -182,6 +182,7 @@ async function fetchProjects() {
     const scope = currentArfScope();
     if (scope) {
         query.arf = `eq.${scope}`;
+        query.status = "eq.In-Progress";
     }
     return supabaseGetAll("projects_normalized", query);
 }
@@ -416,7 +417,10 @@ function visibleBaseProjects() {
 
 function projectMatchesArfScope(project) {
     const scope = currentArfScope();
-    return !scope || String(project.arf || "").trim().toUpperCase() === scope;
+    return !scope || (
+        String(project.arf || "").trim().toUpperCase() === scope
+        && project.status === "In-Progress"
+    );
 }
 
 function groupedProjects(projects) {
