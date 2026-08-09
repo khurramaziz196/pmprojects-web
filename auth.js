@@ -7,6 +7,9 @@ const AUTH_SESSION_KEY = "pmprojects.web.auth.session";
 const AUTH_WORKSPACES_KEY = "pmprojects.web.auth.workspaces";
 const SELECTED_WORKSPACE_KEY = "pmprojects.web.selectedWorkspaceId";
 const INTERNAL_EMAIL_DOMAIN = "pmprojects.local";
+const INTERNAL_ARF_SCOPES = new Map([
+    ["sasib", "SASIB"]
+]);
 const DEFAULT_WORKSPACE = {
     workspace_id: "pmprojects-main",
     role: "viewer",
@@ -66,6 +69,13 @@ window.PMProjectsAuth = {
 
     arfScope() {
         return this.currentWorkspace().arf_scope || "";
+    },
+
+    userLabel() {
+        const workspace = this.currentWorkspace();
+        const email = workspace.user_email || "";
+        const name = workspace.user_display_name || "";
+        return name || emailLabel(email) || "Local user";
     },
 
     selectedWorkspaceId() {
@@ -399,15 +409,25 @@ function enrichedWorkspace(workspace, appUser, session) {
 function arfScopeForUser(email, displayName) {
     const normalizedEmail = String(email || "").trim().toLowerCase();
     if (normalizedEmail.endsWith(`@${INTERNAL_EMAIL_DOMAIN}`)) {
-        return normalizedEmail.split("@")[0].trim().toUpperCase();
+        const username = normalizedEmail.split("@")[0].trim();
+        return INTERNAL_ARF_SCOPES.get(username) || "";
     }
 
-    const normalizedDisplayName = String(displayName || "").trim();
-    if (/^[A-Za-z0-9 _-]+$/.test(normalizedDisplayName) && normalizedDisplayName.toUpperCase() === normalizedDisplayName) {
-        return normalizedDisplayName;
+    const normalizedDisplayName = String(displayName || "").trim().toLowerCase();
+    if (normalizedDisplayName) {
+        return INTERNAL_ARF_SCOPES.get(normalizedDisplayName) || "";
     }
 
     return "";
+}
+
+function emailLabel(email) {
+    const value = String(email || "").trim();
+    if (!value) return "";
+    if (value.toLowerCase().endsWith(`@${INTERNAL_EMAIL_DOMAIN}`)) {
+        return value.split("@")[0];
+    }
+    return value;
 }
 
 async function authGet(table, query, accessToken) {

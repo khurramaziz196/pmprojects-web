@@ -174,7 +174,20 @@ h2 {
 .hero-actions {
     margin-left: auto;
     display: flex;
+    align-items: center;
     gap: 8px;
+}
+
+.user-label {
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 750;
+    white-space: nowrap;
+}
+
+.task-action-bar .user-label {
+    margin-left: auto;
+    padding: 0 8px;
 }
 
 .config-panel {

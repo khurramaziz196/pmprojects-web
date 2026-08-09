@@ -35,6 +35,7 @@ const state = {
 const elements = {
     refreshButton: document.getElementById("refreshButton"),
     logoutButton: document.getElementById("logoutButton"),
+    userLabel: document.getElementById("userLabel"),
     workspaceSummary: document.getElementById("workspaceSummary"),
     syncStatus: document.getElementById("syncStatus"),
     searchInput: document.getElementById("searchInput"),
@@ -308,6 +309,7 @@ function groupCustomFields(rows, idKey) {
 
 function render() {
     document.body.classList.toggle("arf-scoped", Boolean(currentArfScope()));
+    renderUserLabel();
     renderFilters();
     renderMetrics();
     renderProjects();
@@ -315,6 +317,13 @@ function render() {
     elements.workspaceSummary.textContent = visibleCount
         ? `${visibleCount} projects loaded from workspace ${state.config?.workspaceId || "primary"}.`
         : "Connect to Supabase to load projects and tasks.";
+}
+
+function renderUserLabel() {
+    if (!elements.userLabel) return;
+    const label = window.PMProjectsAuth.userLabel?.() || "";
+    const scope = currentArfScope();
+    elements.userLabel.textContent = scope ? `Signed in as ${label} • ARF ${scope}` : `Signed in as ${label}`;
 }
 
 function renderFilters() {

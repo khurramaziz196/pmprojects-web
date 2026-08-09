@@ -40,6 +40,7 @@ const elements = {
     logoutButton: document.getElementById("logoutButton"),
     expandAllTasksButton: document.getElementById("expandAllTasksButton"),
     collapseAllTasksButton: document.getElementById("collapseAllTasksButton"),
+    taskUserLabel: document.getElementById("taskUserLabel"),
     workspaceProjectTitle: document.getElementById("workspaceProjectTitle"),
     workspaceProjectSubtitle: document.getElementById("workspaceProjectSubtitle"),
     workspaceTaskStatus: document.getElementById("workspaceTaskStatus"),
@@ -379,6 +380,7 @@ async function touchWorkspaceSyncCursor() {
 
 function renderTaskPage() {
     document.body.classList.toggle("arf-scoped", Boolean(currentArfScope()));
+    renderTaskUserLabel();
     const project = state.projects.find(item => item.id === state.projectId);
     if (!project) {
         elements.workspaceProjectTitle.textContent = "Project not loaded";
@@ -420,6 +422,13 @@ function renderTaskPage() {
     }));
 
     renderTasks(taskRows);
+}
+
+function renderTaskUserLabel() {
+    if (!elements.taskUserLabel) return;
+    const label = window.PMProjectsAuth.userLabel?.() || "";
+    const scope = currentArfScope();
+    elements.taskUserLabel.textContent = scope ? `Signed in as ${label} • ARF ${scope}` : `Signed in as ${label}`;
 }
 
 function renderTasks(taskRows) {
