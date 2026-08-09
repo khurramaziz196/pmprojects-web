@@ -378,6 +378,7 @@ async function touchWorkspaceSyncCursor() {
 }
 
 function renderTaskPage() {
+    document.body.classList.toggle("arf-scoped", Boolean(currentArfScope()));
     const project = state.projects.find(item => item.id === state.projectId);
     if (!project) {
         elements.workspaceProjectTitle.textContent = "Project not loaded";
@@ -710,6 +711,7 @@ function taskCacheKey() {
 function taskTitleCell(row) {
     const td = document.createElement("td");
     td.className = "task-name-cell";
+    td.classList.toggle("parent-task-cell", row.hasChildren);
     td.style.setProperty("--task-indent", `${Math.max(0, row.level) * 18}px`);
     td.innerHTML = `<div class="task-name-wrap"><button class="task-disclosure" type="button"></button><span class="delivery-icon"></span><div><span class="task-title"></span></div></div>`;
     const disclosure = td.querySelector(".task-disclosure");
@@ -727,8 +729,8 @@ function taskTitleCell(row) {
     });
     const deliveryIcon = td.querySelector(".delivery-icon");
     const deliveryState = taskDeliveryState(row.task);
-    deliveryIcon.classList.add(deliveryState);
-    deliveryIcon.hidden = deliveryState === "none";
+    deliveryIcon.classList.add(row.hasChildren ? "parent" : deliveryState);
+    deliveryIcon.hidden = !row.hasChildren && deliveryState === "none";
     deliveryIcon.textContent = "◆";
     td.querySelector(".task-title").textContent = row.task.title || "Untitled Task";
     return td;

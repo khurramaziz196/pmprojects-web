@@ -307,6 +307,7 @@ function groupCustomFields(rows, idKey) {
 }
 
 function render() {
+    document.body.classList.toggle("arf-scoped", Boolean(currentArfScope()));
     renderFilters();
     renderMetrics();
     renderProjects();

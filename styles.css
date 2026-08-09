@@ -403,6 +403,13 @@ select {
     width: 130px;
 }
 
+body.arf-scoped #projectsTable th:nth-child(2),
+body.arf-scoped #projectsTable td:nth-child(2),
+body.arf-scoped #projectsTable th:nth-child(3),
+body.arf-scoped #projectsTable td:nth-child(3) {
+    display: none;
+}
+
 #projectsTable th:nth-child(4),
 #projectsTable td:nth-child(4) {
     width: 105px;
@@ -760,9 +767,9 @@ td .pill {
 
 .task-name-wrap {
     display: grid;
-    grid-template-columns: 24px 14px minmax(0, 1fr);
+    grid-template-columns: 24px 20px minmax(0, 1fr);
     align-items: center;
-    gap: 4px;
+    gap: 6px;
     padding-left: var(--task-indent, 0);
 }
 
@@ -781,6 +788,18 @@ td .pill {
 
 .delivery-icon.ready {
     color: var(--blue);
+}
+
+.delivery-icon.parent {
+    width: 20px;
+    height: 20px;
+    color: var(--text);
+    font-size: 17px;
+    transform: translateY(-1px);
+}
+
+.parent-task-cell .task-title {
+    font-weight: 850;
 }
 
 .task-disclosure {
@@ -845,6 +864,10 @@ td .pill {
 .task-action-bar button:disabled {
     opacity: 0.48;
     cursor: default;
+}
+
+body.arf-scoped .task-action-bar button:nth-child(n+5) {
+    display: none;
 }
 
 .task-title-block {
