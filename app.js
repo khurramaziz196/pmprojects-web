@@ -130,10 +130,11 @@ async function refreshWorkspace({ force }) {
             return;
         }
 
-        const [projects, projectFields, tasks, equipment] = await Promise.all([
-            fetchProjects(),
-            fetchProjectCustomFields(),
-            fetchTasks(),
+        const projects = await fetchProjects();
+        const projectIds = projects.map(project => project.id).filter(Boolean);
+        const [projectFields, tasks, equipment] = await Promise.all([
+            fetchProjectCustomFields(projectIds),
+            fetchTasks(projectIds),
             fetchEquipment().catch(error => {
                 console.warn("Equipment detail unavailable", error);
                 return [];
@@ -173,26 +174,45 @@ async function fetchSyncCursor() {
 }
 
 async function fetchProjects() {
-    return supabaseGetAll("projects_normalized", {
+    const query = {
         workspace_id: `eq.${state.config.workspaceId}`,
         select: "id,parent_project_id,linked_equipment_id,name,start_date,end_date,actual_start_date,actual_end_date,po_number,so_number,rig_number,arf_ref,status,customer,category,serial_number,completion_percent,priority,arf,estimated_completion_date,mrb_status,remarks,sort_order",
         order: "sort_order.asc"
-    });
+    };
+    const scope = currentArfScope();
+    if (scope) {
+        query.arf = `eq.${scope}`;
+    }
+    return supabaseGetAll("projects_normalized", query);
 }
 
-async function fetchProjectCustomFields() {
-    return supabaseGetAll("project_custom_fields", {
+async function fetchProjectCustomFields(projectIds = []) {
+    if (currentArfScope() && !projectIds.length) {
+        return [];
+    }
+    const query = {
         workspace_id: `eq.${state.config.workspaceId}`,
         select: "project_id,field_key,field_value"
-    });
+    };
+    if (projectIds.length) {
+        query.project_id = `in.(${projectIds.join(",")})`;
+    }
+    return supabaseGetAll("project_custom_fields", query);
 }
 
-async function fetchTasks() {
-    return supabaseGetAll("tasks_normalized", {
+async function fetchTasks(projectIds = []) {
+    if (currentArfScope() && !projectIds.length) {
+        return [];
+    }
+    const query = {
         workspace_id: `eq.${state.config.workspaceId}`,
         select: "id,project_id,parent_task_id,linked_equipment_id,title,status,serial_number,part_number,category",
         order: "project_id.asc,depth.asc,sort_order.asc"
-    });
+    };
+    if (projectIds.length) {
+        query.project_id = `in.(${projectIds.join(",")})`;
+    }
+    return supabaseGetAll("tasks_normalized", query);
 }
 
 async function fetchEquipment() {
@@ -391,7 +411,12 @@ function filteredProjects() {
 }
 
 function visibleBaseProjects() {
-    return state.projects.filter(project => !HIDDEN_PROJECT_STATUSES.has(project.status));
+    return state.projects.filter(project => !HIDDEN_PROJECT_STATUSES.has(project.status) && projectMatchesArfScope(project));
+}
+
+function projectMatchesArfScope(project) {
+    const scope = currentArfScope();
+    return !scope || String(project.arf || "").trim().toUpperCase() === scope;
 }
 
 function groupedProjects(projects) {
@@ -742,7 +767,13 @@ function uniqueValues(values) {
 }
 
 function workspaceDisplayName(workspace) {
-    return workspace?.workspaces?.name || workspace?.workspace_id || "Workspace";
+    const scope = workspace?.arf_scope || "";
+    const label = workspace?.workspaces?.name || workspace?.workspace_id || "Workspace";
+    return scope ? `${label} · ${scope}` : label;
+}
+
+function currentArfScope() {
+    return String(window.PMProjectsAuth.arfScope?.() || state.config?.arfScope || "").trim().toUpperCase();
 }
 
 function loadConfig() {
@@ -764,7 +795,7 @@ function loadCachedWorkspace() {
     try {
         const cached = JSON.parse(localStorage.getItem(CACHE_KEY));
         if (!cached || cached.version !== WORKSPACE_CACHE_VERSION || cached.workspaceId !== state.config.workspaceId) return;
-        state.projects = cached.projects || [];
+        state.projects = (cached.projects || []).filter(projectMatchesArfScope);
         state.tasks = [];
         state.equipment = [];
         state.cursor = cached.cursor || null;

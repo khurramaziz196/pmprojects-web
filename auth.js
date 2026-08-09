@@ -6,12 +6,16 @@ const AUTH_CONFIG_STORAGE_KEY = "pmprojects.web.supabase.config";
 const AUTH_SESSION_KEY = "pmprojects.web.auth.session";
 const AUTH_WORKSPACES_KEY = "pmprojects.web.auth.workspaces";
 const SELECTED_WORKSPACE_KEY = "pmprojects.web.selectedWorkspaceId";
+const INTERNAL_EMAIL_DOMAIN = "pmprojects.local";
 const DEFAULT_WORKSPACE = {
     workspace_id: "pmprojects-main",
     role: "viewer",
     can_read: true,
     can_write: false,
     can_manage_users: false,
+    arf_scope: "",
+    user_email: "",
+    user_display_name: "",
     workspaces: {
         id: "pmprojects-main",
         name: "PMProjects Main"
@@ -53,6 +57,15 @@ window.PMProjectsAuth = {
 
     workspaces() {
         return loadWorkspaces();
+    },
+
+    currentWorkspace() {
+        const workspaceId = loadConfig().workspaceId || DEFAULT_WORKSPACE.workspace_id;
+        return loadWorkspaces().find(item => item.workspace_id === workspaceId) || DEFAULT_WORKSPACE;
+    },
+
+    arfScope() {
+        return this.currentWorkspace().arf_scope || "";
     },
 
     selectedWorkspaceId() {
@@ -122,8 +135,8 @@ function showLogin(onAuthenticated) {
             <h1>Project Workspace</h1>
             <p>Sign in with your Supabase user account.</p>
             <label>
-                Email
-                <input name="email" type="email" autocomplete="username" required>
+                Username or Email
+                <input name="email" type="text" autocomplete="username" required>
             </label>
             <label>
                 Password
@@ -142,11 +155,11 @@ function showLogin(onAuthenticated) {
 
         const emailInput = form.querySelector('input[name="email"]');
         const passwordInput = form.querySelector('input[name="password"]');
-        const email = String(emailInput?.value || "").trim().toLowerCase();
+        const email = loginIdentifierToEmail(emailInput?.value || "");
         const password = String(passwordInput?.value || "");
 
         if (!email) {
-            error.textContent = "Enter email address.";
+            error.textContent = "Enter username or email.";
             return;
         }
 
@@ -281,6 +294,14 @@ async function signInWithPassword(email, password) {
     };
 }
 
+function loginIdentifierToEmail(value) {
+    const identifier = String(value || "").trim().toLowerCase();
+    if (!identifier || identifier.includes("@")) {
+        return identifier;
+    }
+    return `${identifier}@${INTERNAL_EMAIL_DOMAIN}`;
+}
+
 async function updatePassword(accessToken, password) {
     const response = await fetch(`${AUTH_CONFIG.projectUrl}/auth/v1/user`, {
         method: "PUT",
@@ -329,6 +350,7 @@ function setFormBusy(form, isBusy) {
 
 async function loadWorkspaceAccess(session) {
     try {
+        const appUser = await loadAppUser(session);
         const rows = await authGet("workspace_memberships", {
             user_id: `eq.${session.user?.id || ""}`,
             can_read: "eq.true",
@@ -336,11 +358,56 @@ async function loadWorkspaceAccess(session) {
             order: "workspace_id.asc"
         }, session.access_token);
 
-        return rows.length ? rows : [DEFAULT_WORKSPACE];
+        const enrichedRows = rows.map(row => enrichedWorkspace(row, appUser, session));
+        return enrichedRows.length ? enrichedRows : [enrichedWorkspace(DEFAULT_WORKSPACE, appUser, session)];
     } catch (error) {
         console.warn("Workspace memberships unavailable; using default workspace.", error);
-        return [DEFAULT_WORKSPACE];
+        return [enrichedWorkspace(DEFAULT_WORKSPACE, null, session)];
     }
+}
+
+async function loadAppUser(session) {
+    const userId = session.user?.id || "";
+    if (!userId) {
+        return null;
+    }
+
+    try {
+        const rows = await authGet("app_users", {
+            id: `eq.${userId}`,
+            select: "id,email,display_name",
+            limit: "1"
+        }, session.access_token);
+        return rows[0] || null;
+    } catch (error) {
+        console.warn("App user profile unavailable; deriving access scope from auth email.", error);
+        return null;
+    }
+}
+
+function enrichedWorkspace(workspace, appUser, session) {
+    const email = appUser?.email || session.user?.email || "";
+    const displayName = appUser?.display_name || "";
+    return {
+        ...workspace,
+        user_email: email,
+        user_display_name: displayName,
+        arf_scope: arfScopeForUser(email, displayName)
+    };
+}
+
+function arfScopeForUser(email, displayName) {
+    const normalizedEmail = String(email || "").trim().toLowerCase();
+    if (normalizedEmail.endsWith(`@${INTERNAL_EMAIL_DOMAIN}`)) {
+        return normalizedEmail.split("@")[0].trim().toUpperCase();
+    }
+
+    const normalizedDisplayName = String(displayName || "").trim();
+    if (/^[A-Za-z0-9 _-]+$/.test(normalizedDisplayName) && normalizedDisplayName.toUpperCase() === normalizedDisplayName) {
+        return normalizedDisplayName;
+    }
+
+    return "";
 }
 
 async function authGet(table, query, accessToken) {
@@ -398,6 +465,7 @@ function applyWorkspaceConfig(workspace) {
         ...current,
         projectUrl: AUTH_CONFIG.projectUrl,
         apiKey: AUTH_CONFIG.apiKey,
-        workspaceId: workspace.workspace_id
+        workspaceId: workspace.workspace_id,
+        arfScope: workspace.arf_scope || ""
     }));
 }

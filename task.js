@@ -88,11 +88,14 @@ async function refreshWorkspace({ force }) {
             return;
         }
 
-        const [projects, projectFields, tasks] = await Promise.all([
-            fetchProjects(),
-            fetchProjectCustomFields(),
-            fetchTasks()
-        ]);
+        const projects = await fetchProjects();
+        const allowedProject = projects.some(project => project.id === state.projectId);
+        const [projectFields, tasks] = allowedProject
+            ? await Promise.all([
+                fetchProjectCustomFields(projects.map(project => project.id).filter(Boolean)),
+                fetchTasks()
+            ])
+            : [[], []];
         const [taskFields, equipment] = await Promise.all([
             fetchTaskCustomFieldsForTasks(tasks),
             fetchEquipmentForTasks(tasks)
@@ -122,18 +125,30 @@ async function fetchSyncCursor() {
 }
 
 async function fetchProjects() {
-    return supabaseGetAll("projects_normalized", {
+    const query = {
         workspace_id: `eq.${state.config.workspaceId}`,
         select: "id,parent_project_id,linked_equipment_id,name,start_date,end_date,actual_start_date,actual_end_date,po_number,so_number,rig_number,arf_ref,status,customer,category,serial_number,completion_percent,priority,arf,estimated_completion_date,mrb_status,remarks,sort_order",
         order: "sort_order.asc"
-    });
+    };
+    const scope = currentArfScope();
+    if (scope) {
+        query.arf = `eq.${scope}`;
+    }
+    return supabaseGetAll("projects_normalized", query);
 }
 
-async function fetchProjectCustomFields() {
-    return supabaseGetAll("project_custom_fields", {
+async function fetchProjectCustomFields(projectIds = []) {
+    if (currentArfScope() && !projectIds.length) {
+        return [];
+    }
+    const query = {
         workspace_id: `eq.${state.config.workspaceId}`,
         select: "project_id,field_key,field_value"
-    });
+    };
+    if (projectIds.length) {
+        query.project_id = `in.(${projectIds.join(",")})`;
+    }
+    return supabaseGetAll("project_custom_fields", query);
 }
 
 async function fetchTasks() {
@@ -632,7 +647,7 @@ function loadCachedWorkspace() {
     try {
         const cached = JSON.parse(localStorage.getItem(CACHE_KEY));
         if (cached && cached.workspaceId === state.config.workspaceId) {
-            state.projects = cached.projects || [];
+            state.projects = (cached.projects || []).filter(projectMatchesArfScope);
             state.tasks = (cached.tasks || []).filter(task => task.project_id === state.projectId);
             state.cursor = cached.cursor || null;
         }
@@ -1140,6 +1155,15 @@ function startOfDay(date) {
 
 function compactJoin(values, separator) {
     return values.filter(Boolean).join(separator);
+}
+
+function currentArfScope() {
+    return String(window.PMProjectsAuth.arfScope?.() || state.config?.arfScope || "").trim().toUpperCase();
+}
+
+function projectMatchesArfScope(project) {
+    const scope = currentArfScope();
+    return !scope || String(project.arf || "").trim().toUpperCase() === scope;
 }
 
 function uniqueValues(values) {
