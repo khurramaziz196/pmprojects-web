@@ -767,51 +767,79 @@ td .pill {
 
 .task-name-wrap {
     display: grid;
-    grid-template-columns: 24px 20px minmax(0, 1fr);
+    grid-template-columns: 22px 16px minmax(0, 1fr);
     align-items: center;
-    gap: 6px;
+    gap: 5px;
     padding-left: var(--task-indent, 0);
 }
 
 .delivery-icon {
     display: inline-grid;
     place-items: center;
-    width: 14px;
-    height: 14px;
-    font-size: 12px;
+    position: relative;
+    width: 16px;
+    height: 16px;
     line-height: 1;
 }
 
-.delivery-icon.delivered {
-    color: var(--green);
+.delivery-icon.delivered::before,
+.delivery-icon.ready::before {
+    content: "";
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    transform: rotate(30deg) skewY(-8deg);
+    box-shadow: inset -1px -1px 0 rgba(0, 0, 0, 0.16);
 }
 
-.delivery-icon.ready {
-    color: var(--blue);
+.delivery-icon.delivered::before {
+    background: var(--green);
+}
+
+.delivery-icon.ready::before {
+    background: var(--blue);
 }
 
 .delivery-icon.parent {
-    width: 20px;
-    height: 20px;
     color: var(--text);
-    font-size: 17px;
-    transform: translateY(-1px);
+}
+
+.delivery-icon.parent::before {
+    content: "";
+    position: absolute;
+    left: 3px;
+    top: 3px;
+    width: 2px;
+    height: 11px;
+    border-radius: 1px;
+    background: currentColor;
+}
+
+.delivery-icon.parent::after {
+    content: "";
+    position: absolute;
+    left: 5px;
+    top: 3px;
+    width: 9px;
+    height: 7px;
+    border-radius: 1px 2px 2px 1px;
+    background: currentColor;
 }
 
 .parent-task-cell .task-title {
-    font-weight: 850;
+    font-weight: 760;
 }
 
 .task-disclosure {
-    width: 22px;
-    height: 22px;
-    min-height: 22px;
+    width: 20px;
+    height: 20px;
+    min-height: 20px;
     padding: 0;
     border: 0;
     border-radius: 4px;
     background: transparent;
     color: var(--muted);
-    font-size: 14px;
+    font-size: 13px;
     line-height: 1;
 }
 

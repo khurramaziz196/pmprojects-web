@@ -729,9 +729,10 @@ function taskTitleCell(row) {
     });
     const deliveryIcon = td.querySelector(".delivery-icon");
     const deliveryState = taskDeliveryState(row.task);
-    deliveryIcon.classList.add(row.hasChildren ? "parent" : deliveryState);
-    deliveryIcon.hidden = !row.hasChildren && deliveryState === "none";
-    deliveryIcon.textContent = "◆";
+    const markerState = row.hasChildren ? "parent" : deliveryState;
+    deliveryIcon.classList.add(markerState);
+    deliveryIcon.hidden = markerState === "none";
+    deliveryIcon.title = markerState === "delivered" ? "Delivered" : markerState === "ready" ? "Ready" : row.hasChildren ? "Parent task" : "";
     td.querySelector(".task-title").textContent = row.task.title || "Untitled Task";
     return td;
 }
