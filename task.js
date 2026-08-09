@@ -437,7 +437,7 @@ function renderTasks(taskRows) {
         const tr = document.createElement("tr");
         tr.append(
             textCell(row.wbs),
-            taskTitleCell(row),
+            taskTitleCell(row, taskRows),
             editableTaskSelectCell(row.task, "status", TASK_STATUS_OPTIONS, statusClass(row.task.status)),
             editableTaskSelectCell(row.task, "mrb_status", TASK_MRB_STATUS_OPTIONS, "status"),
             taskProgressCell(row, taskRows),
@@ -708,7 +708,7 @@ function taskCacheKey() {
     return `${TASK_CACHE_PREFIX}.${state.config.workspaceId || "default"}.${state.projectId || "none"}`;
 }
 
-function taskTitleCell(row) {
+function taskTitleCell(row, taskRows) {
     const td = document.createElement("td");
     td.className = "task-name-cell";
     td.classList.toggle("parent-task-cell", row.hasChildren);
@@ -728,8 +728,8 @@ function taskTitleCell(row) {
         renderTasks(project ? buildTaskRows(project.id) : []);
     });
     const deliveryIcon = td.querySelector(".delivery-icon");
-    const deliveryState = taskDeliveryState(row.task);
-    const markerState = row.hasChildren ? "parent" : deliveryState;
+    const deliveryState = taskDeliveryStateForRow(row, taskRows);
+    const markerState = deliveryState === "none" && row.hasChildren ? "parent" : deliveryState;
     deliveryIcon.classList.add(markerState);
     deliveryIcon.hidden = markerState === "none";
     deliveryIcon.title = markerState === "delivered" ? "Delivered" : markerState === "ready" ? "Ready" : row.hasChildren ? "Parent task" : "";
@@ -1111,16 +1111,112 @@ function taskDeliveryState(task) {
     return "none";
 }
 
+function taskDeliveryStateForRow(row, taskRows) {
+    if (taskWasDeliveredForRow(row, taskRows)) {
+        return "delivered";
+    }
+    if (taskDeliveryIconStateForRow(row, taskRows) !== "none" || taskDeliverableType(row.task) === 1) {
+        return "ready";
+    }
+    return "none";
+}
+
+function taskDeliveryIconStateForRow(row, taskRows) {
+    const descendants = taskDescendantRows(row, taskRows);
+    if (!descendants.length) {
+        return taskIsReadyForDeliveryIcon(row.task) ? "complete" : "none";
+    }
+
+    const counts = taskSerialDeliveryCountsForRows(descendants);
+    if (counts.total > 0) {
+        if (counts.ready === counts.total) return "complete";
+        return counts.ready > 0 ? "partial" : "none";
+    }
+
+    return taskIsReadyForDeliveryIcon(row.task) ? "complete" : "none";
+}
+
+function taskWasDeliveredForRow(row, taskRows) {
+    if (taskWasExplicitlyUndelivered(row.task)) {
+        return false;
+    }
+    return taskWasDelivered(row.task) || taskAllDeliverableChildrenDelivered(row, taskRows);
+}
+
+function taskAllDeliverableChildrenDelivered(row, taskRows) {
+    const counts = taskDeliveredSerialCountsForRows(taskDescendantRows(row, taskRows));
+    return counts.total > 0 && counts.delivered === counts.total;
+}
+
+function taskSerialDeliveryCountsForRows(rows) {
+    return rows.reduce((counts, row) => {
+        if (taskHasSerial(row.task)) {
+            counts.total += 1;
+            if (taskIsReadyForDeliveryIcon(row.task)) {
+                counts.ready += 1;
+            }
+        }
+        return counts;
+    }, { ready: 0, total: 0 });
+}
+
+function taskDeliveredSerialCountsForRows(rows) {
+    let delivered = 0;
+    let total = 0;
+
+    rows.forEach(row => {
+        if (!taskHasSerial(row.task)) {
+            return;
+        }
+        total += 1;
+        if (taskWasDeliveredWithRowInheritance(row, rows)) {
+            delivered += 1;
+        }
+    });
+
+    return { delivered, total };
+}
+
+function taskWasDeliveredWithRowInheritance(row, peerRows) {
+    if (taskWasExplicitlyUndelivered(row.task)) {
+        return false;
+    }
+    if (taskWasDelivered(row.task)) {
+        return true;
+    }
+    return peerRows.some(candidate => (
+        candidate !== row
+        && row.wbs.startsWith(`${candidate.wbs}.`)
+        && taskWasDelivered(candidate.task)
+    ));
+}
+
+function taskDescendantRows(row, taskRows) {
+    return taskRows.filter(candidate => candidate.wbs.startsWith(`${row.wbs}.`));
+}
+
 function taskWasDelivered(task) {
     return task.customFields?.["Task Delivery State"] === "Delivered";
+}
+
+function taskWasExplicitlyUndelivered(task) {
+    return task.customFields?.["Task Delivery State"] === "Undelivered";
 }
 
 function taskIsReady(task) {
     return task.status === "Done" || taskProgressForStatusAndFields(task) >= 100;
 }
 
+function taskIsReadyForDeliveryIcon(task) {
+    return taskHasSerial(task) && taskIsReady(task);
+}
+
+function taskDeliverableType(task) {
+    return Number(task.customFields?.["Task Deliverable Type"] || 0);
+}
+
 function taskHasSerial(task) {
-    return Boolean(String(task.serial_number || "").trim());
+    return taskSerialTokens(task).length > 0;
 }
 
 function taskProgressForStatusAndFields(task) {
