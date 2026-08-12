@@ -233,6 +233,7 @@ select {
 .toolbar {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: 8px;
     padding: 10px 4px 7px;
 }
@@ -245,6 +246,8 @@ select {
     border-radius: 10px;
     background: linear-gradient(180deg, #eef4fb, #e6edf6);
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75);
+    flex-basis: 100%;
+    width: fit-content;
 }
 
 .view-switch button {
