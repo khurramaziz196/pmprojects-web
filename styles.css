@@ -286,7 +286,7 @@ select {
 }
 
 .metrics {
-    display: flex;
+    display: none;
     gap: 8px;
     margin: 0 0 8px 4px;
 }
