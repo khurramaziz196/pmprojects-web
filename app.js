@@ -39,6 +39,7 @@ const state = {
     equipment: [],
     deliveryTickets: loadDeliveryTicketRecords(),
     deliveryTicketDraft: null,
+    deliveryTicketPushQueue: Promise.resolve(),
     selectedDeliveryTicketId: null,
     cursor: null,
     selectedProjectId: null,
@@ -267,6 +268,7 @@ async function refreshWorkspace({ force }) {
 
     try {
         setStatus(force ? "Refreshing..." : "Checking for changes...");
+        await state.deliveryTicketPushQueue.catch(() => {});
         const cursor = await fetchSyncCursor();
         const hasRemoteChange = !state.cursor?.last_snapshot_updated_at
             || cursor?.last_snapshot_updated_at !== state.cursor.last_snapshot_updated_at;
@@ -300,7 +302,7 @@ async function refreshWorkspace({ force }) {
         state.tasks = attachTaskFields(tasks, taskFields);
         state.equipment = equipment;
         if (Array.isArray(deliveryTickets)) {
-            state.deliveryTickets = deliveryTickets.map(deliveryTicketFromSupabase);
+            state.deliveryTickets = mergeFetchedDeliveryTickets(deliveryTickets.map(deliveryTicketFromSupabase));
             if (!state.selectedDeliveryTicketId || !state.deliveryTickets.some(record => record.id === state.selectedDeliveryTicketId)) {
                 state.selectedDeliveryTicketId = state.deliveryTickets[0]?.id || null;
             }
@@ -1451,9 +1453,34 @@ function saveDeliveryTicketRecords() {
     localStorage.setItem(DELIVERY_TICKET_RECORDS_KEY, JSON.stringify(state.deliveryTickets.map(normalizeDeliveryTicketRecord)));
 }
 
+function mergeFetchedDeliveryTickets(remoteRecords) {
+    const localByID = new Map(state.deliveryTickets.map(record => [record.id, normalizeDeliveryTicketRecord(record)]));
+    const merged = remoteRecords.map(remoteRecord => {
+        const localRecord = localByID.get(remoteRecord.id);
+        if (!localRecord) return remoteRecord;
+        const localUpdated = Date.parse(localRecord.updatedAt || "");
+        const remoteUpdated = Date.parse(remoteRecord.updatedAt || "");
+        if (!Number.isNaN(localUpdated) && !Number.isNaN(remoteUpdated) && localUpdated > remoteUpdated) {
+            pushDeliveryTicketToSupabase(localRecord, false);
+            return localRecord;
+        }
+        return remoteRecord;
+    });
+
+    remoteRecords.forEach(record => localByID.delete(record.id));
+    localByID.forEach(record => {
+        merged.push(record);
+        pushDeliveryTicketToSupabase(record, false);
+    });
+
+    return merged.sort((left, right) => String(right.updatedAt || "").localeCompare(String(left.updatedAt || "")));
+}
+
 function pushDeliveryTicketToSupabase(record, showStatus = false) {
-    if (!isConfigured()) return;
-    supabaseUpsert("delivery_tickets_normalized", [deliveryTicketToSupabase(record)])
+    if (!isConfigured()) return Promise.resolve();
+    state.deliveryTicketPushQueue = state.deliveryTicketPushQueue
+        .catch(() => {})
+        .then(() => supabaseUpsert("delivery_tickets_normalized", [deliveryTicketToSupabase(record)]))
         .then(() => {
             if (showStatus) setDeliveryTicketStatus("Delivery ticket saved and synced.");
         })
@@ -1461,6 +1488,7 @@ function pushDeliveryTicketToSupabase(record, showStatus = false) {
             console.error("Delivery ticket sync failed", error);
             setDeliveryTicketStatus(`Delivery ticket saved locally, but sync failed: ${error.message}`);
         });
+    return state.deliveryTicketPushQueue;
 }
 
 function deleteDeliveryTicketFromSupabase(id) {
