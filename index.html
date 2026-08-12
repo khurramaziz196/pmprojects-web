@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>PMProjects Web Workspace</title>
-    <link rel="stylesheet" href="./styles.css?v=10">
+    <link rel="stylesheet" href="./styles.css?v=17">
 </head>
 <body class="auth-required">
     <main class="app-shell">
@@ -21,12 +21,19 @@
             </div>
             <div class="hero-actions">
                 <span id="userLabel" class="user-label"></span>
+                <select id="localUserSelector" aria-label="Local test user" hidden></select>
                 <button id="refreshButton" type="button">Refresh</button>
                 <button id="logoutButton" type="button">Logout</button>
             </div>
         </section>
 
         <section class="toolbar">
+            <div class="view-switch" aria-label="Workspace view">
+                <button id="dashboardViewButton" type="button" class="active">Dashboard</button>
+                <button id="projectsViewButton" type="button">Projects</button>
+                <button id="equipmentViewButton" type="button">Equipment DB</button>
+                <button id="deliveryTicketViewButton" type="button">Delivery Ticket</button>
+            </div>
             <div class="search-box">
                 <span aria-hidden="true">⌕</span>
                 <input id="searchInput" type="search" placeholder="Search project, PO, customer, serial, ARF">
@@ -63,6 +70,63 @@
             </div>
         </section>
 
+        <section id="dashboardView" class="dashboard-view">
+            <div class="dashboard-hero">
+                <div>
+                    <span>Workspace Dashboard</span>
+                    <h2>Portfolio, delivery, and readiness snapshot</h2>
+                    <p id="dashboardSubtitle">Load workspace data to view dashboard.</p>
+                </div>
+                <div id="dashboardHeroMetrics" class="dashboard-hero-metrics"></div>
+            </div>
+
+            <div id="dashboardDistribution" class="dashboard-distribution"></div>
+
+            <div class="dashboard-grid">
+                <section class="dashboard-panel dashboard-progress-panel">
+                    <div class="panel-header">
+                        <div>
+                            <h2>Project Progress</h2>
+                            <p>A compact view of projects currently moving through execution.</p>
+                        </div>
+                        <div class="dashboard-table-actions">
+                            <span id="dashboardProgressCount">0 rows</span>
+                            <button id="dashboardScrollLeftButton" type="button" aria-label="Scroll project progress left">‹</button>
+                            <button id="dashboardScrollRightButton" type="button" aria-label="Scroll project progress right">›</button>
+                        </div>
+                    </div>
+                    <div class="dashboard-table-scroll" id="dashboardProgressScroll">
+                        <table class="data-table dashboard-progress-table" id="dashboardProgressTable">
+                            <thead>
+                                <tr>
+                                    <th>Project</th>
+                                    <th>PO#</th>
+                                    <th>Rig#</th>
+                                    <th>ARF Ref</th>
+                                    <th>Customer</th>
+                                    <th>Category</th>
+                                    <th>Serial #</th>
+                                    <th>% Done</th>
+                                    <th>ARF</th>
+                                </tr>
+                            </thead>
+                            <tbody id="dashboardProgressBody"></tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <section class="dashboard-panel">
+                    <div class="panel-header">
+                        <div>
+                            <h2>Equipment Focus</h2>
+                            <p>Grouped inventory rows from the synced equipment database.</p>
+                        </div>
+                    </div>
+                    <div id="dashboardEquipmentFocus" class="dashboard-focus-list"></div>
+                </section>
+            </div>
+        </section>
+
         <section id="workspaceGrid" class="workspace-grid">
             <div class="table-panel">
                 <div class="panel-header">
@@ -94,9 +158,150 @@
                 </div>
             </div>
         </section>
+
+        <section id="equipmentView" class="equipment-view" hidden>
+            <div class="table-panel equipment-panel">
+                <div class="panel-header">
+                    <div>
+                        <h2>Equipment DB</h2>
+                        <p>Read-only equipment database from the synced workspace.</p>
+                    </div>
+                    <span id="equipmentCount">0 rows</span>
+                </div>
+                <div class="table-scroll">
+                    <table class="data-table" id="equipmentTable">
+                        <thead>
+                            <tr>
+                                <th>Serial #</th>
+                                <th>Part #</th>
+                                <th>Size</th>
+                                <th>RWP</th>
+                                <th>Category</th>
+                                <th>Model</th>
+                                <th>Rig#</th>
+                                <th>SAWCM</th>
+                                <th>Cycle</th>
+                                <th>Recert Date</th>
+                                <th>Customer</th>
+                                <th>ARF</th>
+                                <th>SRI Ref</th>
+                                <th>Customer PO#</th>
+                                <th>ARF Ref</th>
+                            </tr>
+                        </thead>
+                        <tbody id="equipmentBody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <section id="deliveryTicketView" class="delivery-ticket-view" hidden>
+            <aside class="delivery-ticket-list-panel">
+                <div class="delivery-ticket-list-header">
+                    <div>
+                        <h2>Saved Tickets</h2>
+                        <span id="deliveryTicketRecordCount">0 records</span>
+                    </div>
+                    <button id="deliveryTicketNewSmallButton" type="button" aria-label="New delivery ticket">+</button>
+                </div>
+                <div id="deliveryTicketRecordList" class="delivery-ticket-record-list"></div>
+                <button id="deliveryTicketDeleteButton" type="button" class="delivery-ticket-delete">Delete Selected</button>
+            </aside>
+
+            <section class="delivery-ticket-editor">
+                <div class="delivery-ticket-title-row">
+                    <div>
+                        <h2>Delivery Ticket</h2>
+                        <p>Create transport requests, save records, and generate the delivery ticket PDF.</p>
+                        <span id="deliveryTicketStatus" class="delivery-ticket-status"></span>
+                    </div>
+                    <div class="delivery-ticket-actions">
+                        <button id="deliveryTicketNewButton" type="button">＋ New</button>
+                        <button id="deliveryTicketSaveButton" type="button" class="primary-action">Save</button>
+                        <button id="deliveryTicketSubmitButton" type="button" class="primary-action">Submit for Approval</button>
+                        <button id="deliveryTicketApproveButton" type="button" class="primary-action">Approve</button>
+                        <button id="deliveryTicketRejectButton" type="button">Reject</button>
+                        <button id="deliveryTicketGenerateButton" type="button" class="primary-action">▣ Generate PDF</button>
+                    </div>
+                </div>
+
+                <div id="deliveryTicketApprovalBanner" class="delivery-ticket-approval-banner"></div>
+
+                <div class="delivery-ticket-form">
+                    <section class="delivery-ticket-card">
+                        <h3>Ticket Details</h3>
+                        <div class="delivery-ticket-grid four">
+                            <label>Ticket #<input id="dtTicketNumber" type="text"></label>
+                            <label>Date<input id="dtIssueDate" type="date"></label>
+                            <label>Transport Needed<input id="dtTransportDate" type="date"></label>
+                            <label>Priority<select id="dtPriority"><option>Normal</option><option>Urgent</option><option>Low</option></select></label>
+                        </div>
+                    </section>
+
+                    <section class="delivery-ticket-card">
+                        <h3>Order and Locations</h3>
+                        <label>Order Reference<input id="dtOrderReference" type="text"></label>
+                        <div class="delivery-ticket-grid two">
+                            <label>Pickup Location<textarea id="dtPickupLocation"></textarea></label>
+                            <label>Delivery Location<textarea id="dtDeliveryLocation"></textarea></label>
+                        </div>
+                    </section>
+
+                    <section class="delivery-ticket-card">
+                        <h3>Contacts</h3>
+                        <div class="delivery-ticket-grid four">
+                            <label>Pickup Contact<input id="dtPickupContact" type="text"></label>
+                            <label>Pickup Phone<input id="dtPickupPhone" type="text"></label>
+                            <label>Delivery Contact<input id="dtDeliveryContact" type="text"></label>
+                            <label>Delivery Phone<input id="dtDeliveryPhone" type="text"></label>
+                        </div>
+                    </section>
+
+                    <section class="delivery-ticket-card">
+                        <h3>Goods Details</h3>
+                        <label>Goods Details<textarea id="dtGoodsDetails"></textarea></label>
+                    </section>
+
+                    <section class="delivery-ticket-card">
+                        <h3>Transport Vendor</h3>
+                        <div class="delivery-ticket-grid six">
+                            <label>Transport Vendor<input id="dtTransportVendor" type="text"></label>
+                            <label>Driver Name<input id="dtDriverName" type="text"></label>
+                            <label>Driver Phone<input id="dtDriverPhone" type="text"></label>
+                            <label>Vehicle No.<input id="dtVehicleNumber" type="text"></label>
+                            <label>Vendor Acknowledgement<input id="dtVendorAcknowledgement" type="text"></label>
+                            <label>Authorized By<input id="dtAuthorizedBy" type="text"></label>
+                            <label>Requester Initials / Sign<input id="dtRequesterSignature" type="text"></label>
+                            <label>Approver Initials / Sign<input id="dtApproverSignature" type="text"></label>
+                        </div>
+                        <label>Remarks / Special Instructions<textarea id="dtRemarks"></textarea></label>
+                    </section>
+
+                    <section class="delivery-ticket-card">
+                        <div class="delivery-ticket-card-header">
+                            <h3>Items</h3>
+                            <button id="deliveryTicketAddItemButton" type="button">＋ Add Item</button>
+                        </div>
+                        <table class="delivery-ticket-items">
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>Description</th>
+                                    <th>Qty</th>
+                                    <th>UOM</th>
+                                    <th>Remarks</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody id="deliveryTicketItemsBody"></tbody>
+                        </table>
+                    </section>
+                </div>
+            </section>
+        </section>
     </main>
 
-    <script src="./auth.js?v=11"></script>
-    <script src="./app.js?v=25"></script>
+    <script src="./auth.js?v=14"></script>
+    <script src="./app.js?v=43"></script>
 </body>
 </html>

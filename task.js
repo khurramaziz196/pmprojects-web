@@ -38,6 +38,7 @@ const state = {
 const elements = {
     backToProjectsButton: document.getElementById("backToProjectsButton"),
     logoutButton: document.getElementById("logoutButton"),
+    generatePODButton: document.getElementById("generatePODButton"),
     expandAllTasksButton: document.getElementById("expandAllTasksButton"),
     collapseAllTasksButton: document.getElementById("collapseAllTasksButton"),
     taskUserLabel: document.getElementById("taskUserLabel"),
@@ -58,6 +59,7 @@ function initialiseTaskPage() {
         window.location.href = "index.html";
     });
     elements.logoutButton.addEventListener("click", () => window.PMProjectsAuth.logout());
+    elements.generatePODButton.addEventListener("click", openPODPanel);
     elements.expandAllTasksButton.addEventListener("click", () => {
         state.collapsedTaskIds.clear();
         renderTaskPage();
@@ -195,7 +197,7 @@ async function fetchEquipmentForTasks(tasks) {
     const pages = await Promise.all(chunks.map(chunk => supabaseGetAll("equipment_items_normalized", {
         workspace_id: `eq.${state.config.workspaceId}`,
         id: `in.(${chunk.join(",")})`,
-        select: "id,serial_number,category,size,rwp"
+        select: "id,serial_number,part_number,category,size,rwp,customer,arf"
     })));
     return pages.flat();
 }
@@ -462,6 +464,340 @@ function renderTasks(taskRows) {
     elements.workspaceTasksBody.appendChild(fragment);
 }
 
+function openPODPanel() {
+    const project = state.projects.find(item => item.id === state.projectId);
+    if (!project) return;
+    const taskRows = buildTaskRows(project.id);
+    const taskOptions = podWBSOptions(taskRows);
+    const draft = {
+        ...(loadPODDraft(project) || makePODDraft(project)),
+        deliveryDate: localDateInputValue()
+    };
+
+    const overlay = document.createElement("section");
+    overlay.className = "pod-overlay";
+    overlay.innerHTML = `
+        <div class="pod-panel">
+            <div class="pod-panel-header">
+                <div>
+                    <h2>Generate POD</h2>
+                    <p></p>
+                </div>
+                <button type="button" data-action="close">Close</button>
+            </div>
+            <div class="pod-document">
+                <section class="pod-section">
+                    <h3>Header Details</h3>
+                    <div class="pod-grid three">
+                        ${podFieldHTML("Date", "deliveryDate", "date", draft.deliveryDate)}
+                        ${podFieldHTML("Delivery Note #", "deliveryNoteNumber", "text", draft.deliveryNoteNumber)}
+                        ${podFieldHTML("Rev#", "revisionNumber", "text", draft.revisionNumber)}
+                    </div>
+                    <div class="pod-grid two">
+                        ${podFieldHTML("ARF", "arf", "text", draft.arf)}
+                        ${podFieldHTML("Ship To", "shipTo", "text", draft.shipTo)}
+                    </div>
+                </section>
+                <section class="pod-section">
+                    <h3>Project Data</h3>
+                    <div class="pod-grid three">
+                        ${podFieldHTML("Quote #", "quoteNumber", "text", draft.quoteNumber)}
+                        ${podFieldHTML("Customer PO #", "customerPONumber", "text", draft.customerPONumber)}
+                        ${podFieldHTML("Sales Order", "salesOrder", "text", draft.salesOrder)}
+                    </div>
+                    <div class="pod-grid two">
+                        ${podFieldHTML("Reference", "reference", "text", draft.reference)}
+                        ${podFieldHTML("ARF Reference", "arfReference", "text", draft.arfReference)}
+                    </div>
+                </section>
+                <section class="pod-section">
+                    <div class="pod-section-title">
+                        <h3>Items</h3>
+                        <button type="button" data-action="add-row">Add Row</button>
+                    </div>
+                    <div class="pod-items"></div>
+                </section>
+                <section class="pod-section">
+                    <h3>Notes</h3>
+                    <textarea name="notes" rows="4"></textarea>
+                </section>
+            </div>
+            <div class="pod-panel-actions">
+                <label class="pod-delivered"><input type="checkbox" name="delivered"> Delivered</label>
+                <button type="button" data-action="save">Save Draft</button>
+                <button type="button" data-action="generate" class="primary-action">Generate PDF</button>
+            </div>
+        </div>
+    `;
+    overlay.querySelector(".pod-panel-header p").textContent = project.name || "Project";
+    overlay.querySelector('textarea[name="notes"]').value = draft.notes || "";
+    overlay.querySelector('input[name="delivered"]').checked = Boolean(draft.delivered);
+    document.body.appendChild(overlay);
+
+    let items = normalizePODItems(draft.items);
+    const itemContainer = overlay.querySelector(".pod-items");
+    const renderItems = () => {
+        itemContainer.innerHTML = "";
+        itemContainer.appendChild(podItemHeaderRow());
+        items.forEach((item, index) => itemContainer.appendChild(podItemRow(item, index, taskOptions)));
+    };
+    renderItems();
+
+    overlay.addEventListener("click", async event => {
+        const action = event.target.closest("[data-action]")?.dataset.action;
+        if (!action) return;
+        if (action === "close") {
+            overlay.remove();
+            return;
+        }
+        if (action === "add-row") {
+            items = collectPODItems(overlay);
+            items.push(makePODDraftItem(items.length + 1));
+            renderItems();
+            return;
+        }
+        if (action === "delete-row") {
+            items = collectPODItems(overlay).filter((_, index) => index !== Number(event.target.dataset.index));
+            if (!items.length) items = [makePODDraftItem(1)];
+            renderItems();
+            return;
+        }
+        if (action === "save" || action === "generate") {
+            const nextDraft = collectPODDraft(overlay, project);
+            savePODDraft(project, nextDraft);
+            if (action === "generate") {
+                if (nextDraft.delivered) {
+                    try {
+                        await markPODDraftItemsDelivered(project, nextDraft);
+                    } catch (error) {
+                        elements.workspaceProjectSubtitle.textContent = error.message || "POD delivered update failed";
+                        console.error(error);
+                        return;
+                    }
+                }
+                generatePODPrintWindow(project, nextDraft);
+            }
+        }
+    });
+
+    overlay.addEventListener("change", event => {
+        const taskSelect = event.target.closest("select[data-role='pod-task']");
+        if (taskSelect) {
+            const row = taskSelect.closest(".pod-item-row");
+            const option = taskOptions.find(item => item.id === taskSelect.value);
+            if (!row || !option) return;
+            row.querySelector("[name='linkedWBS']").value = option.wbs;
+            row.querySelector("[name='itemDescription']").value = option.description;
+            row.querySelector("[name='linkedTaskID']").value = option.id;
+            const currentSerials = selectedPODSerialsForRow(row).filter(serial => option.serialOptions.includes(serial));
+            const nextSerials = option.serialOptions.length === 1 ? [option.serialOptions[0]] : currentSerials;
+            setPODSelectedSerials(row, nextSerials);
+            populatePODSerialMenu(row.querySelector("[data-role='pod-serial-menu']"), option, nextSerials);
+            updatePODPartNumber(row, option);
+            updatePODItemQuantity(row);
+            return;
+        }
+
+        const serialMenu = event.target.closest("[data-role='pod-serial-menu']");
+        if (serialMenu) {
+            const row = serialMenu.closest(".pod-item-row");
+            const option = taskOptions.find(item => item.id === row?.querySelector("[data-role='pod-task']")?.value);
+            if (!row || !option) return;
+            populatePODSerialMenu(serialMenu, option, selectedPODSerialsForRow(row));
+            updatePODPartNumber(row, option);
+            updatePODItemQuantity(row);
+        }
+    });
+
+    overlay.addEventListener("click", event => {
+        const menuToggle = event.target.closest("summary[data-serial-toggle]");
+        if (menuToggle) {
+            const menu = menuToggle.closest("[data-role='pod-serial-menu']");
+            overlay.querySelectorAll(".pod-serial-menu[open]").forEach(openMenu => {
+                if (openMenu !== menu) openMenu.removeAttribute("open");
+            });
+            return;
+        }
+
+        const menuAction = event.target.closest("[data-serial-action]");
+        if (menuAction) {
+            const row = menuAction.closest(".pod-item-row");
+            const option = taskOptions.find(item => item.id === row?.querySelector("[data-role='pod-task']")?.value);
+            if (!row || !option) return;
+            if (menuAction.dataset.serialAction === "clear") {
+                setPODSelectedSerials(row, []);
+            } else {
+                const serial = menuAction.dataset.serial || "";
+                const selected = selectedPODSerialsForRow(row);
+                setPODSelectedSerials(
+                    row,
+                    selected.includes(serial)
+                        ? selected.filter(item => item !== serial)
+                        : [...selected, serial]
+                );
+            }
+            populatePODSerialMenu(row.querySelector("[data-role='pod-serial-menu']"), option, selectedPODSerialsForRow(row));
+            updatePODPartNumber(row, option);
+            updatePODItemQuantity(row);
+            row.querySelector("[data-role='pod-serial-menu']")?.setAttribute("open", "");
+            return;
+        }
+
+        if (!event.target.closest(".pod-serial-menu")) {
+            overlay.querySelectorAll(".pod-serial-menu[open]").forEach(menu => menu.removeAttribute("open"));
+        }
+    });
+}
+
+function podFieldHTML(label, name, type, value) {
+    return `<label><span>${escapeHTML(label)}</span><input name="${name}" type="${type}" value="${escapeHTML(value || "")}"></label>`;
+}
+
+function podItemHeaderRow() {
+    const row = document.createElement("div");
+    row.className = "pod-item-row pod-item-header";
+    row.innerHTML = "<span>WBS</span><span>Part No</span><span>Description</span><span>Serial#</span><span>Qty</span><span>UOM</span><span></span>";
+    return row;
+}
+
+function podItemRow(item, index, taskOptions) {
+    const row = document.createElement("div");
+    row.className = "pod-item-row";
+    row.innerHTML = `
+        <select data-role="pod-task"></select>
+        <input name="partNumber" type="text" readonly>
+        <textarea name="itemDescription" rows="2" readonly></textarea>
+        <details class="pod-serial-menu" data-role="pod-serial-menu">
+            <summary data-serial-toggle>Select Serial#</summary>
+            <div class="pod-serial-options"></div>
+            <input name="selectedSerialNumbers" type="hidden">
+        </details>
+        <input name="quantity" type="text" readonly>
+        <input name="uom" type="text">
+        <button type="button" data-action="delete-row" data-index="${index}">Delete</button>
+        <input name="linkedWBS" type="hidden">
+        <input name="linkedTaskID" type="hidden">
+    `;
+    const taskSelect = row.querySelector("select[data-role='pod-task']");
+    taskSelect.appendChild(new Option(item.linkedWBS || "Select WBS", ""));
+    taskOptions.forEach(option => {
+        const menuLabel = `${"  ".repeat(option.level)}${option.wbs} ${option.title}`;
+        taskSelect.appendChild(new Option(menuLabel, option.id));
+    });
+    taskSelect.value = item.linkedTaskID || "";
+
+    const serialMenu = row.querySelector("[data-role='pod-serial-menu']");
+    const option = taskOptions.find(entry => entry.id === item.linkedTaskID);
+    if (option) {
+        const selectedSerials = migratedPODSerialSelection(item, option);
+        setPODSelectedSerials(row, selectedSerials);
+        populatePODSerialMenu(serialMenu, option, selectedPODSerialsForRow(row));
+    } else {
+        setPODSelectedSerials(row, item.selectedSerialNumbers);
+        populatePODSerialMenu(serialMenu, null, item.selectedSerialNumbers);
+    }
+
+    row.querySelector("[name='partNumber']").value = item.partNumber || "";
+    row.querySelector("[name='itemDescription']").value = item.itemDescription || "";
+    row.querySelector("[name='quantity']").value = item.quantity || "";
+    row.querySelector("[name='uom']").value = item.uom || "";
+    row.querySelector("[name='linkedWBS']").value = item.linkedWBS || "";
+    row.querySelector("[name='linkedTaskID']").value = item.linkedTaskID || "";
+    if (option) {
+        updatePODPartNumber(row, option);
+        updatePODItemQuantity(row);
+    }
+    return row;
+}
+
+function updatePODItemQuantity(row) {
+    if (!row) return;
+    const count = selectedPODSerialsForRow(row).length;
+    row.querySelector("[name='quantity']").value = count > 0 ? String(count).padStart(2, "0") : "";
+}
+
+function populatePODSerialMenu(menu, option, selectedSerials = []) {
+    if (!menu) return;
+    const summary = menu.querySelector("[data-serial-toggle]");
+    const optionsContainer = menu.querySelector(".pod-serial-options");
+    const availableSerials = option?.serialOptions || [];
+    const deliveredSerials = new Set((option?.deliveredSerialOptions || []).map(normalizeSerial));
+    const selected = selectedSerials.filter(serial => availableSerials.includes(serial));
+    setPODSelectedSerials(menu.closest(".pod-item-row"), selected);
+
+    if (!availableSerials.length) {
+        summary.textContent = "-";
+        menu.classList.add("no-options");
+        optionsContainer.innerHTML = "";
+        menu.removeAttribute("open");
+        return;
+    }
+
+    menu.classList.remove("no-options");
+    summary.textContent = podSerialMenuTitle(selected);
+    const clearHTML = selected.length
+        ? `<button type="button" class="pod-serial-clear" data-serial-action="clear">Clear Serial Selection</button>`
+        : "";
+    optionsContainer.innerHTML = `
+        ${clearHTML}
+        ${availableSerials.map(serial => `
+            <label data-serial-action="toggle" data-serial="${escapeHTML(serial)}">
+                <input type="checkbox" tabindex="-1" ${selected.includes(serial) ? "checked" : ""}>
+                <span>${escapeHTML(serial)}${deliveredSerials.has(normalizeSerial(serial)) ? " (Delivered)" : ""}</span>
+            </label>
+        `).join("")}
+    `;
+}
+
+function migratedPODSerialSelection(item, option) {
+    const availableSerials = option.serialOptions || [];
+    const selectedSerials = (item.selectedSerialNumbers || []).filter(serial => availableSerials.includes(serial));
+    const quantity = Number.parseInt(item.quantity || "", 10);
+    if (
+        availableSerials.length > 1
+        && selectedSerials.length === availableSerials.length
+        && quantity === availableSerials.length
+    ) {
+        return [];
+    }
+    return selectedSerials;
+}
+
+function podSerialMenuTitle(selectedSerials) {
+    if (!selectedSerials.length) return "Select Serial#";
+    if (selectedSerials.length === 1) return selectedSerials[0];
+    return `${selectedSerials[0]} +${selectedSerials.length - 1}`;
+}
+
+function selectedPODSerialsForRow(row) {
+    if (!row) return [];
+    const input = row.querySelector("[name='selectedSerialNumbers']");
+    try {
+        return uniqueValues(JSON.parse(input?.value || "[]"));
+    } catch {
+        return uniqueValues(String(input?.value || "").split(","));
+    }
+}
+
+function setPODSelectedSerials(row, serials) {
+    if (!row) return;
+    const input = row.querySelector("[name='selectedSerialNumbers']");
+    if (!input) return;
+    input.value = JSON.stringify(uniqueValues(serials || []));
+}
+
+function updatePODPartNumber(row, option) {
+    if (!row || !option) return;
+    const selectedSerials = selectedPODSerialsForRow(row);
+    const resolvedParts = selectedSerials.length
+        ? uniqueValues(selectedSerials.map(serial => {
+            const match = (option.serialPartOptions || []).find(item => normalizeSerial(item.serial) === normalizeSerial(serial));
+            return match?.partNumber || "";
+        }))
+        : option.uniquePartNumbers;
+    row.querySelector("[name='partNumber']").value = resolvedParts.join(", ");
+}
+
 function buildTaskRows(projectId) {
     const all = state.tasks
         .filter(task => task.project_id === projectId)
@@ -562,6 +898,604 @@ function buildDepthFallbackRows(tasks) {
         row.hasChildren ||= rows.some(candidate => candidate.wbs.startsWith(`${row.wbs}.`));
     });
     return rows;
+}
+
+function makePODDraft(project) {
+    return {
+        deliveryDate: localDateInputValue(),
+        deliveryNoteNumber: suggestedPODDeliveryNoteNumber(project),
+        revisionNumber: "0",
+        delivered: false,
+        arf: project.arf || "",
+        shipTo: project.customer || "",
+        quoteNumber: project.name || "",
+        customerPONumber: project.po_number || "",
+        salesOrder: project.so_number || "",
+        reference: project.rig_number || "",
+        arfReference: project.arf_ref || "",
+        notes: "Goods received in good condition.",
+        items: [makePODDraftItem(1)]
+    };
+}
+
+function localDateInputValue(date = new Date()) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+}
+
+function makePODDraftItem(itemNumber) {
+    return {
+        itemNumber,
+        linkedTaskID: "",
+        linkedWBS: "",
+        partNumber: "",
+        itemDescription: "",
+        selectedSerialNumbers: [],
+        quantity: "",
+        uom: "Each"
+    };
+}
+
+function suggestedPODDeliveryNoteNumber(project) {
+    const name = String(project.name || "").trim();
+    if (!name) return "DN-";
+    if (name.startsWith("Q-")) return `DN-${name.slice(2)}`;
+    if (name.startsWith("Q")) return `DN-${name.slice(1)}`;
+    return `DN-${name}`;
+}
+
+function podDraftStorageKey(project) {
+    return `pmprojects.web.podDraft.${project.id}`;
+}
+
+function loadPODDraft(project) {
+    try {
+        const draft = JSON.parse(localStorage.getItem(podDraftStorageKey(project)));
+        return draft ? normalizePODDraft(draft) : null;
+    } catch {
+        return null;
+    }
+}
+
+function savePODDraft(project, draft) {
+    try {
+        localStorage.setItem(podDraftStorageKey(project), JSON.stringify(normalizePODDraft(draft)));
+    } catch {
+        // Draft persistence is local convenience only; generation still works.
+    }
+}
+
+function normalizePODDraft(draft) {
+    return {
+        ...draft,
+        revisionNumber: String(draft.revisionNumber || "0"),
+        notes: draft.notes || "Goods received in good condition.",
+        items: normalizePODItems(draft.items)
+    };
+}
+
+function normalizePODItems(items) {
+    const source = Array.isArray(items) && items.length ? items : [makePODDraftItem(1)];
+    return source.map((item, index) => ({
+        ...makePODDraftItem(index + 1),
+        ...item,
+        itemNumber: index + 1,
+        uom: item.uom || "Each",
+        selectedSerialNumbers: Array.isArray(item.selectedSerialNumbers) ? item.selectedSerialNumbers : []
+    }));
+}
+
+function collectPODDraft(overlay, project) {
+    const value = name => overlay.querySelector(`[name='${name}']`)?.value || "";
+    return normalizePODDraft({
+        deliveryDate: value("deliveryDate"),
+        deliveryNoteNumber: value("deliveryNoteNumber"),
+        revisionNumber: value("revisionNumber"),
+        delivered: overlay.querySelector("[name='delivered']")?.checked || false,
+        arf: value("arf"),
+        shipTo: value("shipTo"),
+        quoteNumber: value("quoteNumber"),
+        customerPONumber: value("customerPONumber"),
+        salesOrder: value("salesOrder"),
+        reference: value("reference"),
+        arfReference: value("arfReference"),
+        notes: value("notes"),
+        items: collectPODItems(overlay)
+    });
+}
+
+function collectPODItems(overlay) {
+    return [...overlay.querySelectorAll(".pod-item-row:not(.pod-item-header)")].map((row, index) => {
+        const selectedTaskID = row.querySelector("[data-role='pod-task']").value || row.querySelector("[name='linkedTaskID']").value || "";
+        const taskRow = buildTaskRows(state.projectId).find(candidate => candidate.task.id === selectedTaskID);
+        return {
+            itemNumber: index + 1,
+            linkedTaskID: selectedTaskID,
+            linkedWBS: row.querySelector("[name='linkedWBS']").value || taskRow?.wbs || "",
+            partNumber: row.querySelector("[name='partNumber']").value || "",
+            itemDescription: row.querySelector("[name='itemDescription']").value || "",
+            selectedSerialNumbers: selectedPODSerialsForRow(row),
+            quantity: row.querySelector("[name='quantity']").value || "",
+            uom: row.querySelector("[name='uom']").value || ""
+        };
+    });
+}
+
+function podWBSOptions(taskRows) {
+    return taskRows.map(row => {
+        const serialOptions = podSerialOptionsForRow(row, taskRows);
+        const deliveredSerialOptions = podDeliveredSerialOptionsForRow(row, taskRows);
+        const serialPartOptions = podSerialPartOptionsForRow(row, taskRows);
+        const uniquePartNumbers = uniquePODPartNumbersForRow(row, taskRows);
+        return {
+            id: row.task.id,
+            wbs: row.wbs,
+            title: row.task.title || "Untitled Task",
+            level: row.level,
+            description: row.task.title || "",
+            serialOptions,
+            deliveredSerialOptions,
+            serialPartOptions,
+            uniquePartNumbers
+        };
+    });
+}
+
+function podSerialOptionsForRow(row, taskRows) {
+    const serials = [];
+    const seen = new Set();
+    const treeRows = [row, ...taskDescendantRows(row, taskRows)];
+    treeRows.forEach(candidate => {
+        if (!taskIsReadyForDeliveryIcon(candidate.task)) return;
+        taskSerialTokens(candidate.task).forEach(serial => {
+            const normalized = normalizeSerial(serial);
+            if (!normalized || seen.has(normalized)) return;
+            seen.add(normalized);
+            serials.push(serial);
+        });
+    });
+    return serials;
+}
+
+function podDeliveredSerialOptionsForRow(row, taskRows) {
+    const serials = [];
+    const seen = new Set();
+    const treeRows = [row, ...taskDescendantRows(row, taskRows)];
+    treeRows.forEach(candidate => {
+        if (!taskWasDeliveredWithTreeInheritance(candidate, treeRows)) return;
+        taskSerialTokens(candidate.task).forEach(serial => {
+            const normalized = normalizeSerial(serial);
+            if (!normalized || seen.has(normalized)) return;
+            seen.add(normalized);
+            serials.push(serial);
+        });
+    });
+    return serials;
+}
+
+function podSerialPartOptionsForRow(row, taskRows) {
+    const output = [];
+    const seen = new Set();
+    const treeRows = [row, ...taskDescendantRows(row, taskRows)];
+    treeRows.forEach(candidate => {
+        if (!taskIsReadyForDeliveryIcon(candidate.task)) return;
+        const partNumber = effectiveTaskPartNumber(candidate.task);
+        taskSerialTokens(candidate.task).forEach(serial => {
+            const key = `${normalizeSerial(serial)}|${partNumber}`;
+            if (!partNumber || !normalizeSerial(serial) || seen.has(key)) return;
+            seen.add(key);
+            output.push({ serial, partNumber });
+        });
+    });
+    return output;
+}
+
+function uniquePODPartNumbersForRow(row, taskRows) {
+    const treeRows = [row, ...taskDescendantRows(row, taskRows)];
+    return uniqueValues(treeRows.map(candidate => effectiveTaskPartNumber(candidate.task)));
+}
+
+function taskWasDeliveredWithTreeInheritance(row, treeRows) {
+    if (taskWasExplicitlyUndelivered(row.task)) {
+        return false;
+    }
+    if (taskWasDeliveredForRow(row, treeRows)) {
+        return true;
+    }
+    return treeRows.some(candidate => (
+        candidate !== row
+        && row.wbs.startsWith(`${candidate.wbs}.`)
+        && taskWasDeliveredForRow(candidate, treeRows)
+    ));
+}
+
+function generatePODPrintWindow(project, draft) {
+    const html = podPrintableHTML(project, normalizePODDraft(draft));
+    const url = URL.createObjectURL(new Blob([html], { type: "text/html" }));
+    const printWindow = window.open(url, "_blank", "width=1100,height=850");
+    if (!printWindow) {
+        URL.revokeObjectURL(url);
+        elements.workspaceProjectSubtitle.textContent = "Popup blocked. Allow popups to generate POD PDF.";
+        return;
+    }
+    printWindow.focus();
+    window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
+function podPrintableHTML(project, draft) {
+    const assetBaseURL = new URL("./", window.location.href).href;
+    const logoURL = new URL("sri-energy-logo.jpg", assetBaseURL).href;
+    const stampURL = new URL("sri-energy-stamp.png", assetBaseURL).href;
+    const arfDisplay = podResolvedARFDisplayValue(draft.arf);
+    const shipToDisplay = podResolvedCustomerDisplayValue(draft.shipTo);
+    const pages = paginatePODPrintPages(draft.items);
+    const pageCount = pages.length;
+    const pageHTML = pages.map((page, index) => podPrintPageHTML({
+        draft,
+        logoURL,
+        stampURL,
+        arfDisplay,
+        shipToDisplay,
+        items: page.items,
+        includeFooter: page.includeFooter,
+        pageNumber: index + 1,
+        pageCount
+    })).join("");
+
+    return `<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>${escapeHTML(draft.deliveryNoteNumber || "Delivery Note")}</title>
+    <style>
+        @page { size: A4 portrait; margin: 12px; }
+        * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        body { margin: 0; padding-bottom: 8px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; color: #000; font-size: 7.4pt; }
+        h1, h2, p { margin: 0; }
+        .page { display: block; box-sizing: border-box; }
+        .page.page-break-before { break-before: page; page-break-before: always; }
+        .page-content { display: block; }
+        .print-page-label { padding-top: 6px; text-align: center; font-size: 7.4pt; color: #777; }
+        .document-header { height: 44px; display: grid; grid-template-columns: 180px 1fr; align-items: center; gap: 12px; }
+        .logo { width: 165px; height: 36px; object-fit: contain; object-position: left center; }
+        .title { color: #c70816; text-align: right; font-size: 25pt; font-weight: 800; }
+        table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+        tr { break-inside: avoid; page-break-inside: avoid; }
+        th, td { border: 1px solid #b7b7b7; padding: 3px 5px; vertical-align: top; }
+        th { background-color: #b9b9b9 !important; color: #333; font-weight: 800; text-align: center; }
+        .company-table th, .company-table td { height: 18px; }
+        .company-table .label-row th { vertical-align: middle; }
+        .company-cell { background-color: #b9b9b9 !important; font-size: 7.4pt; line-height: 1.15; text-align: left; }
+        .company-name { display: block; font-weight: 800; font-size: 8.7pt; margin-bottom: 1px; }
+        .company-email-label { display: inline-block; margin-left: 34px; }
+        .company-email { display: inline-block; margin-left: 185px; }
+        .email { color: #1267c4; }
+        .center { text-align: center; }
+        .bold { font-weight: 800; }
+        .red { color: #c70816; font-weight: 800; }
+        .address-table { margin-top: 12px; }
+        .address-table th { text-align: left; padding-left: 8px; }
+        .address-table td { height: 38px; white-space: pre-line; font-weight: 800; line-height: 1.15; padding: 5px 7px; }
+        .summary-table { margin-top: 16px; }
+        .summary-table th { vertical-align: middle; }
+        .summary-table td { height: 19px; text-align: center; vertical-align: middle; padding: 4px 4px; }
+        .items-table { margin-top: 16px; }
+        .items-table th:nth-child(1), .items-table td:nth-child(1) { width: 38px; }
+        .items-table th:nth-child(2), .items-table td:nth-child(2) { width: 92px; }
+        .items-table th:nth-child(4), .items-table td:nth-child(4) { width: 42px; }
+        .items-table th:nth-child(5), .items-table td:nth-child(5) { width: 55px; }
+        .items-table th { height: 18px; vertical-align: middle; }
+        .items-table td { min-height: 20px; line-height: 1.14; padding: 3px 5px; }
+        .items-table .description { white-space: pre-line; }
+        .footer-block { margin-top: 10px; break-inside: avoid; page-break-inside: avoid; }
+        .footer-table { break-inside: avoid; page-break-inside: avoid; }
+        .footer-table tr,
+        .footer-table td { break-inside: avoid; page-break-inside: avoid; }
+        .footer-table .discrepancy { height: 17px; text-align: right; vertical-align: middle; padding-right: 8px; }
+        .footer-table .notes { min-height: 18px; white-space: pre-line; vertical-align: middle; }
+        .signature-cell { position: relative; height: 58px; text-align: center; font-size: 8.8pt; font-weight: 800; padding-top: 6px; }
+        .stamp { position: absolute; left: 20px; top: 17px; width: 40px; height: 40px; object-fit: contain; opacity: 0.9; }
+        @media print {
+            th,
+            .company-cell {
+                background-color: #b9b9b9 !important;
+                -webkit-print-color-adjust: exact;
+                print-color-adjust: exact;
+            }
+            .footer-block,
+            .footer-table,
+            .footer-table tr,
+            .footer-table td {
+                break-inside: avoid;
+                page-break-inside: avoid;
+            }
+        }
+    </style>
+</head>
+<body>
+    ${pageHTML}
+    <script>
+        function waitForImages() {
+            var images = Array.prototype.slice.call(document.images || []);
+            return Promise.all(images.map(function (image) {
+                if (image.complete && image.naturalWidth > 0) {
+                    return Promise.resolve();
+                }
+                return new Promise(function (resolve) {
+                    image.addEventListener("load", resolve, { once: true });
+                    image.addEventListener("error", resolve, { once: true });
+                });
+            }));
+        }
+        window.addEventListener("load", function () {
+            waitForImages().then(function () {
+                window.print();
+            });
+        });
+    </script>
+</body>
+</html>`;
+}
+
+function podPrintPageHTML({ draft, logoURL, stampURL, arfDisplay, shipToDisplay, items, includeFooter, pageNumber, pageCount }) {
+    const itemRows = items.map(item => podPrintItemRowHTML(item)).join("");
+    const shouldShowItemsTable = items.length || !includeFooter;
+
+    return `
+    <div class="page${pageNumber > 1 ? " page-break-before" : ""}">
+        <div class="page-content">
+        <div class="document-header">
+            <img class="logo" src="${escapeHTML(logoURL)}" alt="SRI Energy">
+            <div class="title">Delivery Note</div>
+        </div>
+        <table class="company-table">
+            <colgroup>
+                <col style="width: 50%">
+                <col style="width: 13%">
+                <col style="width: 22%">
+                <col style="width: 15%">
+            </colgroup>
+	            <thead>
+	                <tr class="label-row">
+	                    <th rowspan="2" class="company-cell">
+	                        <span class="company-name">SRI ENERGY COMPANY LIMITED</span>
+	                        Building No. 2529, Al Dammam 893 Street<br>
+	                        2ⁿᵈ Industrial City Dammam<br>
+	                        Kingdom of Saudi Arabia
+	                        <span class="company-email-label">Email</span><br>
+	                        <span class="email company-email">kaziz@srienergy.com</span>
+	                    </th>
+                    <th>Date</th>
+                    <th>Delivery Note #</th>
+                    <th>Rev#</th>
+                </tr>
+                <tr>
+                    <td class="center bold">${escapeHTML(formatDate(draft.deliveryDate))}</td>
+                    <td class="center red">${escapeHTML(draft.deliveryNoteNumber)}</td>
+                    <td class="center bold">${escapeHTML(podPDFDisplayValue(draft.revisionNumber))}</td>
+                </tr>
+            </thead>
+        </table>
+        <table class="address-table">
+            <colgroup><col style="width:50%"><col style="width:50%"></colgroup>
+            <thead><tr><th>ARF</th><th>Ship To</th></tr></thead>
+            <tbody><tr><td>${escapeHTML(arfDisplay)}</td><td>${escapeHTML(shipToDisplay)}</td></tr></tbody>
+        </table>
+        <table class="summary-table">
+            <colgroup>
+                <col style="width: 17%">
+                <col style="width: 19%">
+                <col style="width: 20%">
+                <col style="width: 22%">
+                <col style="width: 22%">
+            </colgroup>
+            <thead><tr><th>Quote #</th><th>Customer PO #</th><th>Sales Order</th><th>Reference</th><th>ARF Reference</th></tr></thead>
+            <tbody>
+                <tr>
+                    <td>${escapeHTML(podPDFDisplayValue(draft.quoteNumber))}</td>
+                    <td>${escapeHTML(podPDFDisplayValue(draft.customerPONumber))}</td>
+                    <td>${escapeHTML(podPDFDisplayValue(draft.salesOrder))}</td>
+                    <td>${escapeHTML(podPDFDisplayValue(draft.reference))}</td>
+                    <td>${escapeHTML(podPDFDisplayValue(draft.arfReference))}</td>
+                </tr>
+            </tbody>
+        </table>
+        ${shouldShowItemsTable ? `<table class="items-table">
+            <thead><tr><th>Item</th><th>Part No</th><th>Description</th><th>Qty</th><th>UOM</th></tr></thead>
+            <tbody>${itemRows || `<tr><td colspan="5">No items selected.</td></tr>`}</tbody>
+        </table>` : ""}
+        ${includeFooter ? `
+        <div class="footer-block">
+            <table class="footer-table">
+                <colgroup><col style="width:50%"><col style="width:50%"></colgroup>
+                <tbody>
+                    <tr><td colspan="2" class="discrepancy">Please forward any discrepancies to kaziz@srienergy.com</td></tr>
+                    <tr><td colspan="2" class="notes">Notes: ${escapeHTML(draft.notes || "")}</td></tr>
+                    <tr><td class="signature-cell">Customer Authorized Signatory</td><td class="signature-cell"><img class="stamp" src="${escapeHTML(stampURL)}" alt="">Authorized Signatory</td></tr>
+                </tbody>
+            </table>
+        </div>` : ""}
+        </div>
+        <div class="print-page-label">Page ${pageNumber} of ${pageCount}</div>
+    </div>`;
+}
+
+function podPrintItemRowHTML(item) {
+    return `
+        <tr>
+            <td class="center">${escapeHTML(podPDFItemLabel(item))}</td>
+            <td>${escapeHTML(item.partNumber)}</td>
+            <td class="description">${escapeHTML(podPDFItemDescription(item))}</td>
+            <td class="center">${escapeHTML(podPDFDisplayValue(item.quantity))}</td>
+            <td class="center">${escapeHTML(podPDFDisplayValue(item.uom).toUpperCase())}</td>
+        </tr>`;
+}
+
+function paginatePODPrintPages(items) {
+    const sourceItems = Array.isArray(items) && items.length ? items : [];
+    if (!sourceItems.length) {
+        return [{ items: [], includeFooter: true }];
+    }
+
+    const pageItemCapacity = 470;
+    const finalPageItemCapacity = 328;
+    const footerCapacity = 142;
+    const pages = [];
+    let currentItems = [];
+    let currentHeight = 0;
+
+    sourceItems.forEach(item => {
+        const itemHeight = podPrintItemHeight(item);
+        if (currentItems.length && currentHeight + itemHeight > pageItemCapacity) {
+            pages.push({ items: currentItems, includeFooter: false, height: currentHeight });
+            currentItems = [];
+            currentHeight = 0;
+        }
+        currentItems.push(item);
+        currentHeight += itemHeight;
+    });
+
+    if (!pages.length && currentHeight <= finalPageItemCapacity) {
+        return [{ items: currentItems, includeFooter: true }];
+    }
+
+    if (currentHeight <= finalPageItemCapacity) {
+        pages.push({ items: currentItems, includeFooter: true, height: currentHeight });
+    } else {
+        pages.push({ items: currentItems, includeFooter: false, height: currentHeight });
+        pages.push({ items: [], includeFooter: true, height: footerCapacity });
+    }
+
+    return pages;
+}
+
+function podPrintItemHeight(item) {
+    const partLines = estimatedPrintLines(item.partNumber, 18);
+    const descriptionLines = estimatedPrintLines(podPDFItemDescription(item), 88);
+    const lineCount = Math.max(1, partLines, descriptionLines);
+    return Math.max(24, (lineCount * 8.2) + 8);
+}
+
+function estimatedPrintLines(value, charactersPerLine) {
+    const lines = String(value || "")
+        .split("\n")
+        .map(line => Math.max(1, Math.ceil(line.length / charactersPerLine)));
+    return lines.reduce((sum, lineCount) => sum + lineCount, 0);
+}
+
+function podPrintCell(label, value) {
+    return `<div class="cell"><span class="label">${escapeHTML(label)}</span><span class="value">${escapeHTML(value)}</span></div>`;
+}
+
+function podPDFItemLabel(item) {
+    const wbs = String(item.linkedWBS || "").trim();
+    return wbs || String(item.itemNumber || "");
+}
+
+function podPDFItemDescription(item) {
+    const base = String(item.itemDescription || "").trim();
+    const serials = (item.selectedSerialNumbers || [])
+        .map(serial => String(serial || "").trim())
+        .filter(Boolean)
+        .filter(serial => !base.toLowerCase().includes(serial.toLowerCase()));
+    if (!serials.length) return base;
+    const serialBlock = `SN: ${serials.join(", ")}`;
+    return base ? `${base}\n${serialBlock}` : serialBlock;
+}
+
+function podPDFDisplayValue(value) {
+    const trimmed = String(value || "").trim();
+    return trimmed || "-";
+}
+
+function podResolvedARFDisplayValue(value) {
+    const key = String(value || "").trim().toUpperCase();
+    const references = {
+        SASIB: "SASIB Molds, Dies & Spare parts Mfg. Co.\n2nd Industrial City, PO Box 2304, Dammam 34334 Kingdom of Saudi Arabia"
+    };
+    return references[key] || podPDFDisplayValue(value);
+}
+
+function podResolvedCustomerDisplayValue(value) {
+    const key = String(value || "").trim().toUpperCase();
+    const references = {
+        SANAD: "Saudi Aramco Nabors Drilling Company\nOld Abqaiq Road, 31952 Dhahran Kingdom of Saudi Arabia"
+    };
+    return references[key] || podPDFDisplayValue(value);
+}
+
+async function markPODDraftItemsDelivered(project, draft) {
+    const taskRows = buildTaskRows(project.id);
+    const rowsByTaskId = new Map(taskRows.map(row => [row.task.id, row]));
+    const deliveredTaskIds = new Set();
+
+    draft.items.forEach(item => {
+        if (!item.linkedTaskID) return;
+        const rootRow = rowsByTaskId.get(item.linkedTaskID);
+        if (!rootRow) return;
+        taskIdsForPODDelivery(rootRow, taskRows, item.selectedSerialNumbers).forEach(taskId => deliveredTaskIds.add(taskId));
+    });
+
+    if (!deliveredTaskIds.size) {
+        return;
+    }
+
+    const deliveredDate = new Date(draft.deliveryDate || Date.now()).toISOString();
+    const rows = [];
+    deliveredTaskIds.forEach(taskId => {
+        rows.push(
+            taskCustomFieldRow(taskId, "Task Delivery State", "Delivered"),
+            taskCustomFieldRow(taskId, "Task Delivery Delivered Date", deliveredDate),
+            taskCustomFieldRow(taskId, "Task Delivery Note Number", draft.deliveryNoteNumber)
+        );
+    });
+
+    await supabaseUpsert("task_custom_fields", {
+        on_conflict: "workspace_id,task_id,field_key"
+    }, rows);
+
+    deliveredTaskIds.forEach(taskId => {
+        const task = state.tasks.find(item => item.id === taskId);
+        if (!task) return;
+        task.customFields ||= {};
+        task.customFields["Task Delivery State"] = "Delivered";
+        task.customFields["Task Delivery Delivered Date"] = deliveredDate;
+        task.customFields["Task Delivery Note Number"] = draft.deliveryNoteNumber;
+    });
+    await touchWorkspaceSyncCursor();
+    saveCachedWorkspace();
+    renderTaskPage();
+}
+
+function taskCustomFieldRow(taskId, fieldKey, fieldValue) {
+    return {
+        workspace_id: state.config.workspaceId,
+        task_id: taskId,
+        field_key: fieldKey,
+        field_value: fieldValue
+    };
+}
+
+function taskIdsForPODDelivery(rootRow, taskRows, selectedSerials) {
+    const normalizedSelectedSerials = new Set(
+        (selectedSerials || []).map(normalizeSerial).filter(Boolean)
+    );
+    const result = new Set();
+    [rootRow, ...taskDescendantRows(rootRow, taskRows)].forEach(row => {
+        const taskSerials = taskSerialTokens(row.task).map(normalizeSerial).filter(Boolean);
+        if (!normalizedSelectedSerials.size) {
+            result.add(row.task.id);
+        } else if (taskSerials.some(serial => normalizedSelectedSerials.has(serial))) {
+            result.add(row.task.id);
+        }
+    });
+
+    if (!result.size && !normalizedSelectedSerials.size) {
+        result.add(rootRow.task.id);
+    }
+    return result;
 }
 
 function storedWBSForTask(task) {
@@ -1024,6 +1958,13 @@ function taskSerialTokens(task) {
     return parsedSerials(task.serial_number || linked?.serial_number || "");
 }
 
+function effectiveTaskPartNumber(task) {
+    const linked = task.linked_equipment_id
+        ? state.equipment.find(item => item.id === task.linked_equipment_id)
+        : null;
+    return String(task.part_number || linked?.part_number || "").trim();
+}
+
 function parsedSerials(value) {
     return String(value || "")
         .split(/[,;\n]+/)
@@ -1032,7 +1973,18 @@ function parsedSerials(value) {
 }
 
 function normalizeSerial(value) {
-    return String(value || "").trim().toLowerCase();
+    return String(value || "")
+        .replace(/[\s\u00a0\u200b]+/g, "")
+        .toLowerCase();
+}
+
+function escapeHTML(value) {
+    return String(value || "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
 }
 
 function taskStatusCount(label, value, className) {

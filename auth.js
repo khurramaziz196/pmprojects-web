@@ -6,6 +6,7 @@ const AUTH_CONFIG_STORAGE_KEY = "pmprojects.web.supabase.config";
 const AUTH_SESSION_KEY = "pmprojects.web.auth.session";
 const AUTH_WORKSPACES_KEY = "pmprojects.web.auth.workspaces";
 const SELECTED_WORKSPACE_KEY = "pmprojects.web.selectedWorkspaceId";
+const LOCAL_TEST_USER_KEY = "pmprojects.web.localTestUser";
 const INTERNAL_EMAIL_DOMAIN = "pmprojects.local";
 const INTERNAL_ARF_SCOPES = new Map([
     ["sasib", "SASIB"]
@@ -16,7 +17,16 @@ const DEFAULT_WORKSPACE = {
     can_read: true,
     can_write: false,
     can_manage_users: false,
+    can_view_dashboard: true,
+    can_view_projects: false,
+    can_view_equipment_db: false,
+    can_view_delivery_ticket: false,
+    can_create_delivery_ticket: false,
+    can_approve_delivery_ticket: false,
+    can_generate_delivery_ticket_pdf: false,
     arf_scope: "",
+    customer_scope: "",
+    project_scope: "",
     user_email: "",
     user_display_name: "",
     workspaces: {
@@ -63,6 +73,9 @@ window.PMProjectsAuth = {
     },
 
     currentWorkspace() {
+        if (isLocalDevelopmentHost()) {
+            return localTestWorkspace();
+        }
         const workspaceId = loadConfig().workspaceId || DEFAULT_WORKSPACE.workspace_id;
         return loadWorkspaces().find(item => item.workspace_id === workspaceId) || DEFAULT_WORKSPACE;
     },
@@ -76,6 +89,21 @@ window.PMProjectsAuth = {
         const email = workspace.user_email || "";
         const name = workspace.user_display_name || "";
         return name || emailLabel(email) || "Local user";
+    },
+
+    isLocalDevelopmentHost,
+
+    localTestUsers() {
+        return localTestUsers();
+    },
+
+    selectLocalTestUser(email) {
+        localStorage.setItem(LOCAL_TEST_USER_KEY, String(email || "").trim().toLowerCase());
+        const workspace = localTestWorkspace();
+        saveWorkspaces([workspace]);
+        applyWorkspaceConfig(workspace);
+        localStorage.setItem(SELECTED_WORKSPACE_KEY, workspace.workspace_id);
+        return workspace;
     },
 
     selectedWorkspaceId() {
@@ -101,11 +129,92 @@ function isLocalDevelopmentHost() {
 }
 
 function continueLocally(onAuthenticated) {
-    saveWorkspaces([DEFAULT_WORKSPACE]);
-    applyWorkspaceConfig(DEFAULT_WORKSPACE);
-    localStorage.setItem(SELECTED_WORKSPACE_KEY, DEFAULT_WORKSPACE.workspace_id);
+    const workspace = localTestWorkspace();
+    saveWorkspaces([workspace]);
+    applyWorkspaceConfig(workspace);
+    localStorage.setItem(SELECTED_WORKSPACE_KEY, workspace.workspace_id);
     document.body.classList.remove("auth-required");
     onAuthenticated(null);
+}
+
+function localTestUsers() {
+    return [
+        {
+            label: "KSA Projects - Initiator",
+            email: "ksaprojects@pmprojects.local",
+            role: "editor",
+            can_write: true,
+            can_manage_users: false,
+            can_view_dashboard: true,
+            can_view_projects: true,
+            can_view_equipment_db: false,
+            can_view_delivery_ticket: true,
+            can_create_delivery_ticket: true,
+            can_approve_delivery_ticket: false,
+            can_generate_delivery_ticket_pdf: false,
+            arf_scope: "",
+            customer_scope: "",
+            project_scope: ""
+        },
+        {
+            label: "Khurram - Approver",
+            email: "khurram@pmprojects.local",
+            role: "admin",
+            can_write: true,
+            can_manage_users: true,
+            can_view_dashboard: true,
+            can_view_projects: true,
+            can_view_equipment_db: true,
+            can_view_delivery_ticket: true,
+            can_create_delivery_ticket: true,
+            can_approve_delivery_ticket: true,
+            can_generate_delivery_ticket_pdf: true,
+            arf_scope: "",
+            customer_scope: "",
+            project_scope: ""
+        },
+        {
+            label: "MENA - Viewer",
+            email: "mena@pmprojects.local",
+            role: "viewer",
+            can_write: false,
+            can_manage_users: false,
+            can_view_dashboard: true,
+            can_view_projects: true,
+            can_view_equipment_db: false,
+            can_view_delivery_ticket: false,
+            can_create_delivery_ticket: false,
+            can_approve_delivery_ticket: false,
+            can_generate_delivery_ticket_pdf: false,
+            arf_scope: "",
+            customer_scope: "",
+            project_scope: ""
+        }
+    ];
+}
+
+function localTestWorkspace() {
+    const users = localTestUsers();
+    const storedEmail = String(localStorage.getItem(LOCAL_TEST_USER_KEY) || users[0].email).trim().toLowerCase();
+    const user = users.find(item => item.email === storedEmail) || users[0];
+    return {
+        ...DEFAULT_WORKSPACE,
+        role: user.role,
+        can_write: user.can_write,
+        can_manage_users: user.can_manage_users,
+        can_view_dashboard: user.can_view_dashboard,
+        can_view_projects: user.can_view_projects,
+        can_view_equipment_db: user.can_view_equipment_db,
+        can_view_delivery_ticket: user.can_view_delivery_ticket,
+        can_create_delivery_ticket: user.can_create_delivery_ticket,
+        can_approve_delivery_ticket: user.can_approve_delivery_ticket,
+        can_generate_delivery_ticket_pdf: user.can_generate_delivery_ticket_pdf,
+        arf_scope: user.arf_scope || "",
+        customer_scope: user.customer_scope || "",
+        project_scope: user.project_scope || "",
+        user_email: user.email,
+        user_display_name: user.label
+    };
 }
 
 function sessionFromUrlHash() {
@@ -364,7 +473,7 @@ async function loadWorkspaceAccess(session) {
         const rows = await authGet("workspace_memberships", {
             user_id: `eq.${session.user?.id || ""}`,
             can_read: "eq.true",
-            select: "workspace_id,role,can_read,can_write,can_manage_users,workspaces(id,name)",
+            select: "workspace_id,role,can_read,can_write,can_manage_users,can_view_dashboard,can_view_projects,can_view_equipment_db,can_view_delivery_ticket,can_create_delivery_ticket,can_approve_delivery_ticket,can_generate_delivery_ticket_pdf,arf_scope,customer_scope,project_scope,workspaces(id,name)",
             order: "workspace_id.asc"
         }, session.access_token);
 
@@ -402,7 +511,9 @@ function enrichedWorkspace(workspace, appUser, session) {
         ...workspace,
         user_email: email,
         user_display_name: displayName,
-        arf_scope: arfScopeForUser(email, displayName)
+        arf_scope: workspace.arf_scope || arfScopeForUser(email, displayName),
+        customer_scope: workspace.customer_scope || "",
+        project_scope: workspace.project_scope || ""
     };
 }
 
