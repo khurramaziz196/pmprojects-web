@@ -1245,6 +1245,7 @@ function generateDeliveryTicketPDF() {
 function deliveryTicketPrintableHTML(record) {
     const assetBaseURL = new URL("./", window.location.href).href;
     const logoURL = new URL("sri-energy-logo.png", assetBaseURL).href;
+    const logoFallbackURL = new URL("sri-energy-logo.jpg", assetBaseURL).href;
     const rows = record.items.map((item, index) => `
         <tr>
             <td class="center bold">${index + 1}</td>
@@ -1265,6 +1266,9 @@ function deliveryTicketPrintableHTML(record) {
         * { -webkit-print-color-adjust: exact; print-color-adjust: exact; box-sizing: border-box; }
         html, body { width: 100%; min-height: 0; overflow: visible; }
         body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; color: #000; font-size: 8.4pt; }
+        .print-controls { position: fixed; top: 10px; right: 12px; z-index: 10; display: flex; gap: 8px; }
+        .print-controls button { border: 1px solid #c9d3df; border-radius: 6px; background: #f3f6fb; color: #111827; font: 600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; padding: 7px 12px; cursor: pointer; }
+        .print-controls button.primary { background: #1f7aff; border-color: #1f7aff; color: #fff; }
         .document { width: 100%; max-width: 190mm; margin: 0 auto; display: block; overflow: visible; }
         .document-header { height: 38px; display: grid; grid-template-columns: 185px 1fr; align-items: center; gap: 12px; }
         .logo { width: 170px; height: 34px; object-fit: contain; object-position: left center; }
@@ -1293,12 +1297,19 @@ function deliveryTicketPrintableHTML(record) {
         .center { text-align: center; }
         .bold { font-weight: 850; }
         .red { color: #c70816; font-weight: 850; }
+        @media print {
+            .print-controls { display: none !important; }
+        }
     </style>
 </head>
 <body>
+    <div class="print-controls">
+        <button class="primary" type="button" onclick="openPrintDialog()">Print / Save PDF</button>
+        <button type="button" onclick="window.close()">Close</button>
+    </div>
     <main class="document">
         <div class="document-header">
-            <img class="logo" src="${escapeHTML(logoURL)}" alt="SRI Energy">
+            <img class="logo" src="${escapeHTML(logoURL)}" alt="SRI Energy" onerror="this.onerror=null;this.src='${escapeAttribute(logoFallbackURL)}';">
             <div class="title">Delivery Ticket</div>
         </div>
         <table class="company-table">
@@ -1355,8 +1366,14 @@ function deliveryTicketPrintableHTML(record) {
                 });
             }));
         }
+        function openPrintDialog() {
+            window.focus();
+            setTimeout(function () { window.print(); }, 100);
+        }
         window.addEventListener("load", function () {
-            waitForImages().then(function () { window.print(); });
+            waitForImages().then(function () {
+                setTimeout(openPrintDialog, 350);
+            });
         });
     </script>
 </body>
