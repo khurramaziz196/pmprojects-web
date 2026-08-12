@@ -256,6 +256,10 @@ function renderLocalUserSelector() {
 }
 
 async function refreshWorkspace({ force }) {
+    await window.PMProjectsAuth.refreshWorkspaceAccess?.();
+    state.config = loadConfig();
+    renderWorkspaceSelector();
+
     if (!isConfigured()) {
         setStatus("Supabase access key is not embedded.");
         return;
@@ -520,10 +524,10 @@ function render() {
 }
 
 function renderActiveView() {
-    elements.dashboardViewButton.hidden = !canViewPage("dashboard");
-    elements.projectsViewButton.hidden = !canViewPage("projects");
-    elements.equipmentViewButton.hidden = !canViewPage("equipment");
-    elements.deliveryTicketViewButton.hidden = !canViewPage("deliveryTicket");
+    setPageButtonVisibility(elements.dashboardViewButton, canViewPage("dashboard"));
+    setPageButtonVisibility(elements.projectsViewButton, canViewPage("projects"));
+    setPageButtonVisibility(elements.equipmentViewButton, canViewPage("equipment"));
+    setPageButtonVisibility(elements.deliveryTicketViewButton, canViewPage("deliveryTicket"));
     elements.dashboardViewButton.classList.toggle("active", state.activeView === "dashboard");
     elements.projectsViewButton.classList.toggle("active", state.activeView === "projects");
     elements.equipmentViewButton.classList.toggle("active", state.activeView === "equipment");
@@ -534,17 +538,31 @@ function renderActiveView() {
     elements.deliveryTicketView.hidden = state.activeView !== "deliveryTicket";
 }
 
+function setPageButtonVisibility(button, isVisible) {
+    button.hidden = !isVisible;
+    button.style.display = isVisible ? "" : "none";
+}
+
 function currentWorkspacePermissions() {
     return window.PMProjectsAuth.currentWorkspace?.() || {};
 }
 
 function hasWorkspacePermission(key, fallback = false) {
     const workspace = currentWorkspacePermissions();
-    if (workspace.role === "admin") return true;
     if (Object.prototype.hasOwnProperty.call(workspace, key)) {
-        return Boolean(workspace[key]);
+        return permissionValueIsEnabled(workspace[key]);
     }
+    if (workspace.role === "admin") return true;
     return fallback;
+}
+
+function permissionValueIsEnabled(value) {
+    if (typeof value === "boolean") return value;
+    if (typeof value === "number") return value !== 0;
+    const normalized = String(value ?? "").trim().toLowerCase();
+    if (["true", "t", "yes", "y", "1"].includes(normalized)) return true;
+    if (["false", "f", "no", "n", "0", ""].includes(normalized)) return false;
+    return Boolean(value);
 }
 
 function canViewPage(page) {

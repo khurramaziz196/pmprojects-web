@@ -118,6 +118,28 @@ window.PMProjectsAuth = {
         return selected;
     },
 
+    async refreshWorkspaceAccess() {
+        if (isLocalDevelopmentHost()) {
+            const workspace = localTestWorkspace();
+            saveWorkspaces([workspace]);
+            applyWorkspaceConfig(workspace);
+            localStorage.setItem(SELECTED_WORKSPACE_KEY, workspace.workspace_id);
+            return workspace;
+        }
+
+        const session = loadSession();
+        if (!session?.access_token || isSessionExpired(session)) {
+            return this.currentWorkspace();
+        }
+
+        const workspaces = await loadWorkspaceAccess(session);
+        const selected = selectInitialWorkspace(workspaces);
+        saveWorkspaces(workspaces);
+        applyWorkspaceConfig(selected);
+        localStorage.setItem(SELECTED_WORKSPACE_KEY, selected.workspace_id);
+        return selected;
+    },
+
     logout() {
         clearSession();
         window.location.href = "index.html";
