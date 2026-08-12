@@ -1242,7 +1242,7 @@ function generateDeliveryTicketPDF() {
 
 function deliveryTicketPrintableHTML(record) {
     const assetBaseURL = new URL("./", window.location.href).href;
-    const logoURL = new URL("sri-energy-logo.jpg", assetBaseURL).href;
+    const logoURL = new URL("sri-energy-logo.png", assetBaseURL).href;
     const rows = record.items.map((item, index) => `
         <tr>
             <td class="center bold">${index + 1}</td>
