@@ -990,7 +990,9 @@ function canApproveDeliveryTickets() {
 }
 
 function canGenerateDeliveryTicketPDF() {
-    return hasWorkspacePermission("can_generate_delivery_ticket_pdf", false);
+    return hasWorkspacePermission("can_generate_delivery_ticket_pdf", false)
+        || canInitiateDeliveryTickets()
+        || canApproveDeliveryTickets();
 }
 
 function deliveryTicketApprovalStatus(record) {
