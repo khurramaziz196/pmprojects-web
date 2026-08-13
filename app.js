@@ -2164,12 +2164,13 @@ function computeProjectTaskProgress(projectId, project = null) {
 }
 
 function taskProgress(task) {
+    if (task.status === "Done") return 100;
+
     const fields = task.customFields || {};
     const explicit = Number(fields["Task Progress Percent"]);
     if (Number.isFinite(explicit)) {
         return Math.max(0, Math.min(100, explicit));
     }
-    if (task.status === "Done") return 100;
     if (task.status === "In-Progress" || task.status === "In Progress") return 50;
     if (task.status === "Not Started") return 0;
     return 0;

@@ -2021,19 +2021,17 @@ function progressForProject(project) {
 }
 
 function progressForTaskRow(row, taskRows) {
-    const stored = storedProgressForTask(row.task);
-    if (stored !== null) {
-        return stored;
-    }
-
     const descendants = taskRows.filter(candidate => candidate.wbs.startsWith(`${row.wbs}.`));
-    const progressRows = descendants.length ? descendants.filter(candidate => !candidate.hasChildren) : [row];
+    const progressRows = descendants.length
+        ? descendants.filter(candidate => !candidate.hasChildren && !isTaskInactive(candidate.task))
+        : [row];
+
     if (!progressRows.length) {
         return row.task.status === "Done" ? 100 : 0;
     }
 
-    const completed = progressRows.filter(candidate => candidate.task.status === "Done").length;
-    return Math.round((completed / progressRows.length) * 100);
+    const total = progressRows.reduce((sum, candidate) => sum + taskProgressForStatusAndFields(candidate.task), 0);
+    return Math.round(total / progressRows.length);
 }
 
 function storedProgressForTask(task) {
@@ -2181,9 +2179,10 @@ function taskHasSerial(task) {
 }
 
 function taskProgressForStatusAndFields(task) {
+    if (task.status === "Done") return 100;
+
     const stored = storedProgressForTask(task);
     if (stored !== null) return stored;
-    if (task.status === "Done") return 100;
     if (task.status === "In-Progress" || task.status === "In Progress") return 50;
     return 0;
 }
