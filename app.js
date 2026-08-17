@@ -45,6 +45,7 @@ const state = {
     selectedDeliveryTicketId: null,
     cursor: null,
     selectedProjectId: null,
+    collapsedProjectIds: new Set(),
     hasFreshWorkspaceCache: false,
     activeView: "dashboard",
     filters: {
@@ -751,9 +752,14 @@ function renderProjects() {
     const fragment = document.createDocumentFragment();
     groupedProjects(rows).forEach(group => {
         fragment.appendChild(groupHeaderRow(group.status, group.projects.length));
-        group.projects.forEach(project => {
+        projectHierarchyRows(group.projects).forEach(hierarchyRow => {
+        const project = hierarchyRow.project;
         const tr = document.createElement("tr");
-        tr.className = project.id === state.selectedProjectId ? "selected" : "";
+        const rowClasses = [];
+        if (project.id === state.selectedProjectId) rowClasses.push("selected");
+        if (hierarchyRow.level > 0) rowClasses.push("child-project-row");
+        if (hierarchyRow.hasChildren) rowClasses.push("parent-project-row");
+        tr.className = rowClasses.join(" ");
         tr.addEventListener("click", () => {
             state.selectedProjectId = project.id;
             renderProjects();
@@ -761,7 +767,7 @@ function renderProjects() {
         tr.addEventListener("dblclick", () => openProjectWorkspace(project.id));
 
         tr.append(
-            projectNameCell(project),
+            projectNameCell(project, hierarchyRow),
             textCell(project.po_number),
             textCell(project.so_number),
             textCell(project.rig_number),
@@ -1885,6 +1891,53 @@ function groupedProjects(projects) {
     return [...knownGroups, ...customGroups];
 }
 
+function projectHierarchyRows(projects) {
+    const projectIds = new Set(projects.map(project => project.id));
+    const childrenByParentId = new Map();
+    const rootProjects = [];
+
+    projects.forEach(project => {
+        const parentId = project.parent_project_id || "";
+        if (parentId && projectIds.has(parentId)) {
+            if (!childrenByParentId.has(parentId)) {
+                childrenByParentId.set(parentId, []);
+            }
+            childrenByParentId.get(parentId).push(project);
+        } else {
+            rootProjects.push(project);
+        }
+    });
+
+    const compareProjects = (left, right) => {
+        const leftOrder = Number.isFinite(Number(left.sort_order)) ? Number(left.sort_order) : Number.MAX_SAFE_INTEGER;
+        const rightOrder = Number.isFinite(Number(right.sort_order)) ? Number(right.sort_order) : Number.MAX_SAFE_INTEGER;
+        if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+        return String(left.name || "").localeCompare(String(right.name || ""), undefined, { sensitivity: "base" });
+    };
+
+    rootProjects.sort(compareProjects);
+    childrenByParentId.forEach(children => children.sort(compareProjects));
+
+    const rows = [];
+    const walk = (items, level) => {
+        items.forEach(project => {
+            const children = childrenByParentId.get(project.id) || [];
+            rows.push({
+                project,
+                level,
+                hasChildren: children.length > 0,
+                isExpanded: children.length > 0 && !state.collapsedProjectIds.has(project.id)
+            });
+            if (children.length && !state.collapsedProjectIds.has(project.id)) {
+                walk(children, level + 1);
+            }
+        });
+    };
+
+    walk(rootProjects, 0);
+    return rows;
+}
+
 function groupHeaderRow(status, count) {
     const tr = document.createElement("tr");
     tr.className = `group-row ${statusClass(status)}`;
@@ -1897,20 +1950,43 @@ function groupHeaderRow(status, count) {
     return tr;
 }
 
-function projectNameCell(project) {
+function projectNameCell(project, hierarchy = { level: 0, hasChildren: false }) {
     const td = document.createElement("td");
     td.className = "project-name-cell";
     const subline = compactJoin([project.po_number && `PO ${project.po_number}`, project.customer], " · ");
+    const level = Math.max(0, Number(hierarchy.level || 0));
+    const marker = level > 0 ? "└" : (hierarchy.hasChildren ? (hierarchy.isExpanded ? "▾" : "▸") : "");
     td.innerHTML = `
         <div class="project-name-row">
-            <div class="project-title-block">
-                <span class="project-name"></span>
-                <span class="subtext"></span>
+            <div class="project-title-wrap">
+                <span class="project-tree-indent"></span>
+                <span class="project-tree-marker"></span>
+                <div class="project-title-block">
+                    <span class="project-name"></span>
+                    <span class="subtext"></span>
+                </div>
             </div>
             <button class="project-add-button" type="button" aria-label="Add child project">+</button>
             <button class="open-button" type="button">OPEN</button>
         </div>
     `;
+    td.querySelector(".project-tree-indent").style.width = `${level * 18}px`;
+    const markerElement = td.querySelector(".project-tree-marker");
+    markerElement.textContent = marker;
+    if (hierarchy.hasChildren && level === 0) {
+        markerElement.classList.add("interactive");
+        markerElement.setAttribute("role", "button");
+        markerElement.setAttribute("aria-label", hierarchy.isExpanded ? "Collapse child projects" : "Expand child projects");
+        markerElement.addEventListener("click", event => {
+            event.stopPropagation();
+            if (state.collapsedProjectIds.has(project.id)) {
+                state.collapsedProjectIds.delete(project.id);
+            } else {
+                state.collapsedProjectIds.add(project.id);
+            }
+            renderProjects();
+        });
+    }
     td.querySelector(".project-name").textContent = project.name || "Untitled Project";
     td.querySelector(".subtext").textContent = subline;
     td.querySelector(".project-add-button").addEventListener("click", event => {

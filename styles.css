@@ -1220,8 +1220,49 @@ body.arf-scoped #projectsTable td:nth-child(3) {
     min-height: 100%;
 }
 
+.project-title-wrap {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+}
+
+.project-tree-indent {
+    flex: 0 0 auto;
+}
+
+.project-tree-marker {
+    width: 14px;
+    flex: 0 0 14px;
+    color: var(--muted);
+    font-size: 14px;
+    font-weight: 800;
+    line-height: 1;
+    text-align: center;
+}
+
+.project-tree-marker.interactive {
+    cursor: pointer;
+    color: #7e8794;
+}
+
+.project-tree-marker.interactive:hover {
+    color: var(--blue);
+}
+
 .project-title-block {
     min-width: 0;
+}
+
+.child-project-row .project-name-cell {
+    background: #f8fbff;
+}
+
+.child-project-row .project-name {
+    font-size: 12.5px;
+}
+
+.parent-project-row .project-name {
+    letter-spacing: 0;
 }
 
 .project-add-button {
