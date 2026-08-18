@@ -1795,7 +1795,7 @@ function dashboardCustomerColor(customer, index = 0) {
 function equipmentFocusRows() {
     const groups = new Map();
     state.equipment.forEach(item => {
-        const category = String(item.category || "Unassigned").trim() || "Unassigned";
+        const category = equipmentFocusCategoryLabel(item.category);
         const key = category.toUpperCase();
         const existing = groups.get(key) || { label: category, count: 0, sizes: new Set(), rwps: new Set() };
         existing.count += 1;
@@ -1804,14 +1804,57 @@ function equipmentFocusRows() {
         groups.set(key, existing);
     });
 
+    const priorityOrder = [
+        "DUMP IRON",
+        "MANUAL",
+        "HCR",
+        "CHECK VALVE",
+        "ADJUSTABLE CHOKE",
+        "ONSHORE CKM",
+        "OFFSHORE CKM",
+        "WT MANIFOLD",
+        "MANIFOLD SKID",
+        "LOOSE VALVES",
+        "GATE VALVE",
+        "UNASSIGNED"
+    ];
+    const priorityRank = label => {
+        const index = priorityOrder.indexOf(String(label || "").toUpperCase());
+        return index === -1 ? Number.MAX_SAFE_INTEGER : index;
+    };
+
     return [...groups.values()]
-        .sort((left, right) => right.count - left.count || left.label.localeCompare(right.label))
-        .slice(0, 8)
+        .sort((left, right) => {
+            const leftRank = priorityRank(left.label);
+            const rightRank = priorityRank(right.label);
+            if (leftRank !== rightRank) return leftRank - rightRank;
+            return right.count - left.count || left.label.localeCompare(right.label);
+        })
         .map(row => ({
             label: row.label,
             count: row.count,
             detail: `${row.sizes.size || 0} sizes . ${row.rwps.size || 0} RWP ratings`
         }));
+}
+
+function equipmentFocusCategoryLabel(value) {
+    const raw = String(value || "Unassigned").trim();
+    if (!raw) return "Unassigned";
+
+    const normalized = raw.replaceAll("_", " ").replace(/\s+/g, " ").trim().toUpperCase();
+    if (normalized.includes("OFFSHORE") && normalized.includes("CKM")) return "OFFSHORE CKM";
+    if (normalized.includes("ONSHORE") && normalized.includes("CKM")) return "ONSHORE CKM";
+    if (normalized.includes("DUMP") && normalized.includes("IRON")) return "DUMP IRON";
+    if (normalized.includes("CHECK") && normalized.includes("VALVE")) return "CHECK VALVE";
+    if (normalized.includes("ADJUSTABLE") && normalized.includes("CHOKE")) return "ADJUSTABLE CHOKE";
+    if (normalized.includes("WT") && normalized.includes("MANIFOLD")) return "WT MANIFOLD";
+    if (normalized.includes("MANIFOLD") && normalized.includes("SKID")) return "MANIFOLD SKID";
+    if (normalized.includes("LOOSE") && normalized.includes("VALVE")) return "LOOSE VALVES";
+    if (normalized.includes("GATE") && normalized.includes("VALVE")) return "GATE VALVE";
+    if (normalized.includes("MANUAL")) return "MANUAL";
+    if (normalized.includes("HCR")) return "HCR";
+
+    return raw;
 }
 
 function emptyDashboardMessage(message) {
