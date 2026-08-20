@@ -1638,6 +1638,10 @@ body.arf-scoped .task-action-bar button:disabled {
     box-shadow: 0 24px 70px rgba(15, 23, 42, 0.24);
 }
 
+.pod-panel.has-saved-notes {
+    width: min(1440px, calc(100vw - 44px));
+}
+
 .pod-panel-header,
 .pod-panel-actions {
     display: flex;
@@ -1664,10 +1668,126 @@ body.arf-scoped .task-action-bar button:disabled {
     margin-left: auto;
 }
 
+.pod-panel-body {
+    min-height: 0;
+    display: grid;
+    grid-template-columns: 264px minmax(0, 1fr);
+    gap: 16px;
+    overflow: hidden;
+    padding: 16px;
+}
+
+.pod-saved-notes {
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #fff;
+}
+
+.pod-saved-notes-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 14px;
+}
+
+.pod-saved-notes-header h3 {
+    margin: 0;
+    font-size: 15px;
+}
+
+.pod-saved-notes-header span {
+    display: block;
+    margin-top: 2px;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.pod-saved-notes-header button {
+    min-width: 44px;
+    font-size: 18px;
+    line-height: 1;
+}
+
+.pod-saved-notes-list {
+    min-height: 0;
+    flex: 1;
+    overflow: auto;
+    padding: 8px 10px;
+}
+
+.pod-saved-empty {
+    height: 100%;
+    min-height: 240px;
+    display: grid;
+    place-items: center;
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 800;
+    text-align: center;
+}
+
+.pod-saved-note {
+    width: 100%;
+    display: grid;
+    gap: 3px;
+    margin-bottom: 6px;
+    padding: 9px 10px;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--text);
+    text-align: left;
+}
+
+.pod-saved-note:hover,
+.pod-saved-note.selected {
+    border-color: #b9cdf1;
+    background: #edf4ff;
+}
+
+.pod-saved-note strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 13px;
+}
+
+.pod-saved-note span {
+    overflow: hidden;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 700;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.pod-saved-notes-actions {
+    display: grid;
+    gap: 8px;
+    padding: 12px;
+    border-top: 1px solid var(--line);
+}
+
 .pod-document {
     overflow: auto;
     padding: 16px;
     background: white;
+}
+
+.pod-panel-body .pod-document {
+    padding: 0;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: white;
+}
+
+.pod-panel-body .pod-section {
+    margin: 16px;
 }
 
 .pod-section {
@@ -1872,6 +1992,21 @@ body.arf-scoped .task-action-bar button:disabled {
     margin-right: auto;
     color: var(--muted);
     font-weight: 800;
+}
+
+@media (max-width: 900px) {
+    .pod-panel-body {
+        grid-template-columns: 1fr;
+        overflow: auto;
+    }
+
+    .pod-saved-notes {
+        min-height: 240px;
+    }
+
+    .pod-panel-body .pod-document {
+        overflow: visible;
+    }
 }
 
 .task-title-block {

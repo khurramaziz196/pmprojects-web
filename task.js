@@ -2,6 +2,7 @@ const CONFIG_KEY = "pmprojects.web.supabase.config";
 const CACHE_KEY = "pmprojects.web.workspace.cache";
 const TASK_CACHE_PREFIX = "pmprojects.web.task.cache";
 const TASK_COLUMN_WIDTHS_KEY = "pmprojects.web.task.columnWidths";
+const POD_SAVED_DELIVERY_NOTES_KEY_PREFIX = "pmprojects.web.podSavedDeliveryNotes";
 const TASK_CACHE_VERSION = 5;
 const TASK_STATUS_OPTIONS = [
     "Not Started",
@@ -473,11 +474,13 @@ function openPODPanel() {
         ...(loadPODDraft(project) || makePODDraft(project)),
         deliveryDate: localDateInputValue()
     };
+    let savedNoteRecords = loadSavedPODDeliveryNoteRecords(project);
+    let selectedSavedNoteID = matchingSavedPODDeliveryNoteID(draft, savedNoteRecords);
 
     const overlay = document.createElement("section");
     overlay.className = "pod-overlay";
     overlay.innerHTML = `
-        <div class="pod-panel">
+        <div class="pod-panel has-saved-notes">
             <div class="pod-panel-header">
                 <div>
                     <h2>Generate POD</h2>
@@ -485,42 +488,58 @@ function openPODPanel() {
                 </div>
                 <button type="button" data-action="close">Close</button>
             </div>
-            <div class="pod-document">
-                <section class="pod-section">
-                    <h3>Header Details</h3>
-                    <div class="pod-grid three">
-                        ${podFieldHTML("Date", "deliveryDate", "date", draft.deliveryDate)}
-                        ${podFieldHTML("Delivery Note #", "deliveryNoteNumber", "text", draft.deliveryNoteNumber)}
-                        ${podFieldHTML("Rev#", "revisionNumber", "text", draft.revisionNumber)}
+            <div class="pod-panel-body">
+                <aside class="pod-saved-notes">
+                    <div class="pod-saved-notes-header">
+                        <div>
+                            <h3>Saved Notes</h3>
+                            <span data-role="pod-saved-count">0 records</span>
+                        </div>
+                        <button type="button" data-action="new-saved-note" aria-label="New delivery note">+</button>
                     </div>
-                    <div class="pod-grid two">
-                        ${podFieldHTML("ARF", "arf", "text", draft.arf)}
-                        ${podFieldHTML("Ship To", "shipTo", "text", draft.shipTo)}
+                    <div class="pod-saved-notes-list" data-role="pod-saved-list"></div>
+                    <div class="pod-saved-notes-actions">
+                        <button type="button" data-action="save-saved-note">Save Current</button>
+                        <button type="button" data-action="delete-saved-note">Delete Selected</button>
                     </div>
-                </section>
-                <section class="pod-section">
-                    <h3>Project Data</h3>
-                    <div class="pod-grid three">
-                        ${podFieldHTML("Quote #", "quoteNumber", "text", draft.quoteNumber)}
-                        ${podFieldHTML("Customer PO #", "customerPONumber", "text", draft.customerPONumber)}
-                        ${podFieldHTML("Sales Order", "salesOrder", "text", draft.salesOrder)}
-                    </div>
-                    <div class="pod-grid two">
-                        ${podFieldHTML("Reference", "reference", "text", draft.reference)}
-                        ${podFieldHTML("ARF Reference", "arfReference", "text", draft.arfReference)}
-                    </div>
-                </section>
-                <section class="pod-section">
-                    <div class="pod-section-title">
-                        <h3>Items</h3>
-                        <button type="button" data-action="add-row">Add Row</button>
-                    </div>
-                    <div class="pod-items"></div>
-                </section>
-                <section class="pod-section">
-                    <h3>Notes</h3>
-                    <textarea name="notes" rows="4"></textarea>
-                </section>
+                </aside>
+                <div class="pod-document">
+                    <section class="pod-section">
+                        <h3>Header Details</h3>
+                        <div class="pod-grid three">
+                            ${podFieldHTML("Date", "deliveryDate", "date", draft.deliveryDate)}
+                            ${podFieldHTML("Delivery Note #", "deliveryNoteNumber", "text", draft.deliveryNoteNumber)}
+                            ${podFieldHTML("Rev#", "revisionNumber", "text", draft.revisionNumber)}
+                        </div>
+                        <div class="pod-grid two">
+                            ${podFieldHTML("ARF", "arf", "text", draft.arf)}
+                            ${podFieldHTML("Ship To", "shipTo", "text", draft.shipTo)}
+                        </div>
+                    </section>
+                    <section class="pod-section">
+                        <h3>Project Data</h3>
+                        <div class="pod-grid three">
+                            ${podFieldHTML("Quote #", "quoteNumber", "text", draft.quoteNumber)}
+                            ${podFieldHTML("Customer PO #", "customerPONumber", "text", draft.customerPONumber)}
+                            ${podFieldHTML("Sales Order", "salesOrder", "text", draft.salesOrder)}
+                        </div>
+                        <div class="pod-grid two">
+                            ${podFieldHTML("Reference", "reference", "text", draft.reference)}
+                            ${podFieldHTML("ARF Reference", "arfReference", "text", draft.arfReference)}
+                        </div>
+                    </section>
+                    <section class="pod-section">
+                        <div class="pod-section-title">
+                            <h3>Items</h3>
+                            <button type="button" data-action="add-row">Add Row</button>
+                        </div>
+                        <div class="pod-items"></div>
+                    </section>
+                    <section class="pod-section">
+                        <h3>Notes</h3>
+                        <textarea name="notes" rows="4"></textarea>
+                    </section>
+                </div>
             </div>
             <div class="pod-panel-actions">
                 <label class="pod-delivered"><input type="checkbox" name="delivered"> Delivered</label>
@@ -536,12 +555,90 @@ function openPODPanel() {
 
     let items = normalizePODItems(draft.items);
     const itemContainer = overlay.querySelector(".pod-items");
+    const savedNotesCount = overlay.querySelector("[data-role='pod-saved-count']");
+    const savedNotesList = overlay.querySelector("[data-role='pod-saved-list']");
     const renderItems = () => {
         itemContainer.innerHTML = "";
         itemContainer.appendChild(podItemHeaderRow());
         items.forEach((item, index) => itemContainer.appendChild(podItemRow(item, index, taskOptions)));
     };
     renderItems();
+
+    const renderSavedNotes = () => {
+        savedNotesCount.textContent = `${savedNoteRecords.length} ${savedNoteRecords.length === 1 ? "record" : "records"}`;
+        if (!savedNoteRecords.length) {
+            savedNotesList.innerHTML = `<div class="pod-saved-empty">No saved delivery notes.</div>`;
+            return;
+        }
+        savedNotesList.innerHTML = savedNoteRecords.map(record => {
+            const recordDraft = normalizePODDraft(record.draft);
+            const selectedClass = record.id === selectedSavedNoteID ? " selected" : "";
+            const title = recordDraft.deliveryNoteNumber || "Delivery Note";
+            const subtitle = [
+                recordDraft.deliveryDate ? podSavedNoteDateText(recordDraft.deliveryDate) : "",
+                recordDraft.shipTo || ""
+            ].filter(Boolean).join(" - ");
+            return `
+                <button type="button" class="pod-saved-note${selectedClass}" data-action="select-saved-note" data-note-id="${escapeHTML(record.id)}">
+                    <strong>${escapeHTML(title)}</strong>
+                    <span>${escapeHTML(subtitle || "Saved delivery note")}</span>
+                </button>
+            `;
+        }).join("");
+    };
+
+    const applyDraftToPanel = nextDraft => {
+        const normalizedDraft = normalizePODDraft(nextDraft);
+        Object.entries({
+            deliveryDate: normalizedDraft.deliveryDate,
+            deliveryNoteNumber: normalizedDraft.deliveryNoteNumber,
+            revisionNumber: normalizedDraft.revisionNumber,
+            arf: normalizedDraft.arf,
+            shipTo: normalizedDraft.shipTo,
+            quoteNumber: normalizedDraft.quoteNumber,
+            customerPONumber: normalizedDraft.customerPONumber,
+            salesOrder: normalizedDraft.salesOrder,
+            reference: normalizedDraft.reference,
+            arfReference: normalizedDraft.arfReference,
+            notes: normalizedDraft.notes
+        }).forEach(([name, value]) => {
+            const field = overlay.querySelector(`[name='${name}']`);
+            if (field) field.value = value || "";
+        });
+        overlay.querySelector("[name='delivered']").checked = Boolean(normalizedDraft.delivered);
+        items = normalizePODItems(normalizedDraft.items);
+        renderItems();
+    };
+
+    const saveCurrentPODDeliveryNoteRecord = () => {
+        const nextDraft = collectPODDraft(overlay, project);
+        savePODDraft(project, nextDraft);
+        const timestamp = new Date().toISOString();
+        if (selectedSavedNoteID) {
+            savedNoteRecords = savedNoteRecords.map(record => (
+                record.id === selectedSavedNoteID
+                    ? { ...record, draft: nextDraft, updatedAt: timestamp }
+                    : record
+            ));
+        } else {
+            selectedSavedNoteID = makeLocalRecordID();
+            savedNoteRecords = [
+                {
+                    id: selectedSavedNoteID,
+                    draft: nextDraft,
+                    createdAt: timestamp,
+                    updatedAt: timestamp
+                },
+                ...savedNoteRecords
+            ];
+        }
+        savedNoteRecords = sortedPODDeliveryNoteRecords(savedNoteRecords);
+        saveSavedPODDeliveryNoteRecords(project, savedNoteRecords);
+        renderSavedNotes();
+        return nextDraft;
+    };
+
+    renderSavedNotes();
 
     overlay.addEventListener("click", async event => {
         const action = event.target.closest("[data-action]")?.dataset.action;
@@ -562,9 +659,47 @@ function openPODPanel() {
             renderItems();
             return;
         }
-        if (action === "save" || action === "generate") {
-            const nextDraft = collectPODDraft(overlay, project);
+        if (action === "new-saved-note") {
+            const baseDraft = makePODDraft(project);
+            selectedSavedNoteID = null;
+            applyDraftToPanel({
+                ...baseDraft,
+                deliveryDate: localDateInputValue(),
+                deliveryNoteNumber: nextPODDeliveryNoteNumber(baseDraft.deliveryNoteNumber, savedNoteRecords)
+            });
+            renderSavedNotes();
+            return;
+        }
+        if (action === "select-saved-note") {
+            const noteID = event.target.closest("[data-note-id]")?.dataset.noteId;
+            const record = savedNoteRecords.find(item => item.id === noteID);
+            if (!record) return;
+            selectedSavedNoteID = record.id;
+            const nextDraft = normalizePODDraft(record.draft);
             savePODDraft(project, nextDraft);
+            applyDraftToPanel(nextDraft);
+            renderSavedNotes();
+            return;
+        }
+        if (action === "save-saved-note") {
+            saveCurrentPODDeliveryNoteRecord();
+            return;
+        }
+        if (action === "delete-saved-note") {
+            if (!selectedSavedNoteID) return;
+            savedNoteRecords = savedNoteRecords.filter(record => record.id !== selectedSavedNoteID);
+            selectedSavedNoteID = savedNoteRecords[0]?.id || null;
+            saveSavedPODDeliveryNoteRecords(project, savedNoteRecords);
+            const nextDraft = selectedSavedNoteID
+                ? normalizePODDraft(savedNoteRecords.find(record => record.id === selectedSavedNoteID)?.draft || makePODDraft(project))
+                : makePODDraft(project);
+            savePODDraft(project, nextDraft);
+            applyDraftToPanel(nextDraft);
+            renderSavedNotes();
+            return;
+        }
+        if (action === "save" || action === "generate") {
+            const nextDraft = saveCurrentPODDeliveryNoteRecord();
             if (action === "generate") {
                 if (nextDraft.delivered) {
                     try {
@@ -965,6 +1100,80 @@ function savePODDraft(project, draft) {
     } catch {
         // Draft persistence is local convenience only; generation still works.
     }
+}
+
+function podSavedDeliveryNotesStorageKey(project) {
+    return `${POD_SAVED_DELIVERY_NOTES_KEY_PREFIX}.${project.id}`;
+}
+
+function loadSavedPODDeliveryNoteRecords(project) {
+    try {
+        const records = JSON.parse(localStorage.getItem(podSavedDeliveryNotesStorageKey(project)) || "[]");
+        return sortedPODDeliveryNoteRecords((Array.isArray(records) ? records : []).map(normalizePODDeliveryNoteRecord).filter(Boolean));
+    } catch {
+        return [];
+    }
+}
+
+function saveSavedPODDeliveryNoteRecords(project, records) {
+    try {
+        localStorage.setItem(
+            podSavedDeliveryNotesStorageKey(project),
+            JSON.stringify(sortedPODDeliveryNoteRecords(records).map(normalizePODDeliveryNoteRecord).filter(Boolean))
+        );
+    } catch {
+        // Saved notes are local convenience only; POD generation can continue without them.
+    }
+}
+
+function normalizePODDeliveryNoteRecord(record) {
+    if (!record || typeof record !== "object") return null;
+    const timestamp = record.updatedAt || record.createdAt || new Date().toISOString();
+    return {
+        id: String(record.id || makeLocalRecordID()),
+        draft: normalizePODDraft(record.draft || {}),
+        createdAt: record.createdAt || timestamp,
+        updatedAt: timestamp
+    };
+}
+
+function sortedPODDeliveryNoteRecords(records) {
+    return [...records]
+        .map(normalizePODDeliveryNoteRecord)
+        .filter(Boolean)
+        .sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
+}
+
+function matchingSavedPODDeliveryNoteID(draft, records) {
+    const deliveryNoteNumber = String(draft.deliveryNoteNumber || "").trim();
+    if (!deliveryNoteNumber) return null;
+    return records.find(record => String(record.draft?.deliveryNoteNumber || "").trim() === deliveryNoteNumber)?.id || null;
+}
+
+function nextPODDeliveryNoteNumber(baseNumber, records) {
+    const base = String(baseNumber || "DN-").trim() || "DN-";
+    const existing = new Set(records.map(record => String(record.draft?.deliveryNoteNumber || "").trim()));
+    if (!existing.has(base)) return base;
+    for (let index = 2; index < 1000; index += 1) {
+        const candidate = `${base}-${String(index).padStart(2, "0")}`;
+        if (!existing.has(candidate)) return candidate;
+    }
+    return `${base}-${Date.now()}`;
+}
+
+function podSavedNoteDateText(value) {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(String(value || ""))) {
+        const [year, month, day] = String(value).split("-");
+        return `${day}/${month}/${year}`;
+    }
+    return formatDate(value);
+}
+
+function makeLocalRecordID() {
+    if (window.crypto?.randomUUID) {
+        return window.crypto.randomUUID();
+    }
+    return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 function normalizePODDraft(draft) {
