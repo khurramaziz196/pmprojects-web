@@ -710,7 +710,7 @@ function openPODPanel() {
                         return;
                     }
                 }
-                generatePODPrintWindow(project, nextDraft);
+                await generatePODPrintWindow(project, nextDraft);
             }
         }
     });
@@ -1320,23 +1320,52 @@ function taskWasDeliveredWithTreeInheritance(row, treeRows) {
     ));
 }
 
-function generatePODPrintWindow(project, draft) {
-    const html = podPrintableHTML(project, normalizePODDraft(draft));
-    const url = URL.createObjectURL(new Blob([html], { type: "text/html" }));
-    const printWindow = window.open(url, "_blank", "width=1100,height=850");
+async function generatePODPrintWindow(project, draft) {
+    const printWindow = window.open("", "_blank", "width=1100,height=850");
     if (!printWindow) {
-        URL.revokeObjectURL(url);
         elements.workspaceProjectSubtitle.textContent = "Popup blocked. Allow popups to generate POD PDF.";
         return;
     }
-    printWindow.focus();
-    window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+
+    try {
+        const [logoURL, stampURL] = await Promise.all([
+            podAssetDataURL("sri-energy-logo.png"),
+            podAssetDataURL("sri-energy-stamp.png")
+        ]);
+        const html = podPrintableHTML(project, normalizePODDraft(draft), { logoURL, stampURL });
+        printWindow.document.open();
+        printWindow.document.write(html);
+        printWindow.document.close();
+        printWindow.focus();
+    } catch (error) {
+        printWindow.close();
+        elements.workspaceProjectSubtitle.textContent = error.message || "POD asset loading failed.";
+        console.error(error);
+    }
 }
 
-function podPrintableHTML(project, draft) {
+async function podAssetDataURL(filename) {
     const assetBaseURL = new URL("./", window.location.href).href;
-    const logoURL = new URL("sri-energy-logo.jpg", assetBaseURL).href;
-    const stampURL = new URL("sri-energy-stamp.png", assetBaseURL).href;
+    const assetURL = new URL(filename, assetBaseURL).href;
+    const response = await fetch(assetURL, { cache: "force-cache" });
+    if (!response.ok) {
+        throw new Error(`POD asset not found: ${filename}`);
+    }
+    return blobToDataURL(await response.blob());
+}
+
+function blobToDataURL(blob) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.addEventListener("load", () => resolve(reader.result));
+        reader.addEventListener("error", () => reject(reader.error || new Error("Image conversion failed.")));
+        reader.readAsDataURL(blob);
+    });
+}
+
+function podPrintableHTML(project, draft, assets) {
+    const logoURL = assets.logoURL;
+    const stampURL = assets.stampURL;
     const arfDisplay = podResolvedARFDisplayValue(draft.arf);
     const shipToDisplay = podResolvedCustomerDisplayValue(draft.shipTo);
     const pages = paginatePODPrintPages(draft.items);
